@@ -116,6 +116,19 @@ describe("renderHtml with null URL (status pane)", () => {
     const html = renderHtml(null, "", NONCE);
     expect(html).not.toContain("frame-src");
   });
+
+  it("renders the logo and an img-src CSP when an icon URI is provided", () => {
+    const html = renderHtml(null, "", NONCE, "https://host/icon.svg", "vscode-webview://abc");
+    expect(html).toContain('class="logo"');
+    expect(html).toContain("img-src vscode-webview://abc");
+    expect(html).toContain('mask: url("https://host/icon.svg")');
+  });
+
+  it("omits the logo and img-src when no icon URI is provided", () => {
+    const html = renderHtml(null, "", NONCE);
+    expect(html).not.toContain('class="logo"');
+    expect(html).not.toContain("img-src");
+  });
 });
 
 describe("DashboardSidebar onShow auto-start", () => {

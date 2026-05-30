@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.4 — 2026-05-30
+
+### Dashboard
+
+- Recoloured the dashboard to a warm, neutral palette aligned with the Claude Code interface (less blue): page `#161617`, cards `#1E1F20`, lighter text `#BFBFBF`, plus a `--raised` hover layer and a dedicated `--red`. Switched to an elevated layering model — cards sit *above* the page (lighter), hover lighter still — replacing the previous inverted scheme.
+- Reworked chart colours: a warm, Anthropic-leaning donut palette (clay/tan/sage/dusty-blue/…); token series are blue / coral / green / amber; chart axis & legend text use a slightly lighter shade so small labels stay legible on the dark cards.
+- Chart hovers now lighten consistently (bars/series go to full opacity; the doughnut pops the hovered slice). Tooltip colour swatches are solid and borderless — removed Chart.js's default white `multiKeyBackground` edge. The hourly chart's legend/tooltip use a coral circle for the output line and a blue square for the turns bars.
+- Legend series toggles now persist across repaints (filter changes, auto-refresh, sorting) for every chart, including per-slice visibility on the doughnut.
+- Header title and gauge icon now use the lightest text colour (neutral) instead of coral. Selected model chips use a neutral background with a coral border; range / timezone tabs use a neutral selected background (no orange).
+- Cost values use thousand separators (e.g. `$1,050.49`).
+- Header meta puts "Auto-refresh in 30s" on its own line, with more space before the Rescan button.
+- Removed the ⚡ peak-hour markers from the hourly axis labels (they collided with the axis; peak hours are still shown by the red bars and the legend).
+- Fixed a stale "Apr 2026" stat sublabel → "May 2026".
+
+### Extension
+
+- The loading / status screen now matches the dashboard header — same gauge icon (served via a webview URI), title, and elevated-palette colours — instead of the old coral heading on a mismatched background.
+
 ## v1.2.3 — 2026-05-30
 
 ### Extension

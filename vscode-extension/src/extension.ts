@@ -30,7 +30,7 @@ class Extension {
     // to spawn the server. openDashboard() coalesces repeat calls.
     this.sidebar = new DashboardSidebar(() => {
       void this.openDashboard();
-    });
+    }, context.extensionUri);
 
     context.subscriptions.push(
       this.output,

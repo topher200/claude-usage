@@ -133,14 +133,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #191A1B;
-    --card: #1a1d27;
-    --border: #2a2d3a;
-    --text: #e2e8f0;
-    --muted: #8892a4;
+    --bg: #161617;      /* page base */
+    --card: #1E1F20;    /* raised one step above the page */
+    --border: #2C2D2E;
+    --text: #BFBFBF;
+    --muted: #4F4F50;
     --accent: #d97757;
-    --blue: #4f8ef7;
-    --green: #4ade80;
+    --blue: #48A0C7;
+    --green: #74C991;
+    --red: #C74E39;
+    --raised: #2E2F31;  /* hover / raised surfaces — top of the elevation ladder */
+    --selected: #262626;  /* selected chips / tabs (neutral, not accent) */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
@@ -158,18 +161,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   ::-webkit-scrollbar-corner { background: #121314; }
 
   header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
-  header h1 { font-size: 18px; font-weight: 600; color: var(--accent); }
+  header h1 { font-size: 18px; font-weight: 600; color: var(--text); }
   header .header-title { display: flex; align-items: center; gap: 10px; }
   /* The icon is a monochrome silhouette (white shape on transparent). We paint
-     it with the title color via a CSS mask + background-color, so it tracks
-     --accent dynamically — same value as `header h1`. */
+     it with the title color via a CSS mask + background-color, so it matches
+     `header h1` — the lightest text color. */
   header .header-icon {
     width: 26px; height: 26px; flex-shrink: 0; display: block;
-    background-color: var(--accent);
+    background-color: var(--text);
     -webkit-mask: url("icon.svg") no-repeat center / contain;
     mask: url("icon.svg") no-repeat center / contain;
   }
-  header .meta { color: var(--muted); font-size: 12px; }
+  header .meta { color: var(--muted); font-size: 12px; text-align: right; line-height: 1.5; margin-right: 20px; }
   #rescan-btn { background: var(--card); border: 1px solid var(--border); color: var(--muted); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-top: 4px; }
   #rescan-btn:hover { color: var(--text); border-color: var(--accent); }
   #rescan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -180,15 +183,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   #model-checkboxes { display: flex; flex-wrap: wrap; gap: 6px; }
   .model-cb-label { display: flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; border: 1px solid var(--border); cursor: pointer; font-size: 12px; color: var(--muted); transition: border-color 0.15s, color 0.15s, background 0.15s; user-select: none; }
   .model-cb-label:hover { border-color: var(--accent); color: var(--text); }
-  .model-cb-label.checked { background: rgba(217,119,87,0.12); border-color: var(--accent); color: var(--text); }
+  .model-cb-label.checked { background: var(--selected); border-color: var(--accent); color: var(--text); }
   .model-cb-label input { display: none; }
   .filter-btn { padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
   .filter-btn:hover { border-color: var(--accent); color: var(--text); }
   .range-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex-shrink: 0; }
   .range-btn { padding: 4px 13px; background: transparent; border: none; border-right: 1px solid var(--border); color: var(--muted); font-size: 12px; cursor: pointer; transition: background 0.15s, color 0.15s; }
   .range-btn:last-child { border-right: none; }
-  .range-btn:hover { background: rgba(255,255,255,0.04); color: var(--text); }
-  .range-btn.active { background: rgba(217,119,87,0.15); color: var(--accent); font-weight: 600; }
+  .range-btn:hover { background: var(--raised); color: var(--text); }
+  .range-btn.active { background: var(--selected); color: var(--text); font-weight: 600; }
 
   .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
   .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
@@ -214,10 +217,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .tz-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .tz-btn { padding: 3px 10px; background: transparent; border: none; border-right: 1px solid var(--border); color: var(--muted); font-size: 11px; cursor: pointer; transition: background 0.15s, color 0.15s; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
   .tz-btn:last-child { border-right: none; }
-  .tz-btn:hover { background: rgba(255,255,255,0.04); color: var(--text); }
-  .tz-btn.active { background: rgba(217,119,87,0.15); color: var(--accent); }
+  .tz-btn:hover { background: var(--raised); color: var(--text); }
+  .tz-btn.active { background: var(--selected); color: var(--text); }
   .peak-legend { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
-  .peak-swatch { width: 10px; height: 10px; background: rgba(248,113,113,0.8); border-radius: 2px; display: inline-block; }
+  .peak-swatch { width: 10px; height: 10px; background: var(--red); border-radius: 2px; display: inline-block; }
 
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; padding: 8px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -226,8 +229,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .sort-icon { font-size: 9px; opacity: 0.8; }
   td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
   tr:last-child td { border-bottom: none; }
-  tr:hover td { background: rgba(255,255,255,0.02); }
-  .model-tag { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; background: rgba(79,142,247,0.15); color: var(--blue); }
+  tr:hover td { background: var(--raised); }
+  .model-tag { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; background: rgba(72,160,199,0.15); color: var(--blue); }
   .cost { color: var(--green); font-family: monospace; }
   .cost-na { color: var(--muted); font-family: monospace; font-size: 11px; }
   .num { font-family: monospace; }
@@ -531,17 +534,75 @@ function fmt(n) {
   if (n >= 1e3) return (n/1e3).toFixed(1)+'K';
   return n.toLocaleString();
 }
-function fmtCost(c)    { return '$' + c.toFixed(4); }
-function fmtCostBig(c) { return '$' + c.toFixed(2); }
+function fmtCost(c)    { return '$' + c.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }); }
+function fmtCostBig(c) { return '$' + c.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 // ── Chart colors ───────────────────────────────────────────────────────────
-const TOKEN_COLORS = {
-  input:          'rgba(79,142,247,0.8)',
-  output:         'rgba(167,139,250,0.8)',
-  cache_read:     'rgba(74,222,128,0.6)',
-  cache_creation: 'rgba(251,191,36,0.6)',
+// Warm/neutral palette kept in sync with the CSS :root variables so charts match
+// the Claude Code interface (less blue). Chart legends/axes use C.axis (a touch
+// lighter than --muted so small labels stay legible on the dark card); grid uses
+// C.border.
+const C = {
+  text:   '#BFBFBF',
+  muted:  '#4F4F50',
+  axis:   '#6F6F70',
+  border: '#2C2D2E',
+  card:   '#1E1F20',
+  blue:   '#48A0C7',
+  green:  '#74C991',
+  red:    '#C74E39',
+  accent: '#d97757',
+  amber:  '#D9A84E',
+  purple: '#9B7EC7',
+  teal:   '#5BB8A3',
+  mauve:  '#C77E9B',
 };
-const MODEL_COLORS = ['#d97757','#4f8ef7','#4ade80','#a78bfa','#fbbf24','#f472b6','#34d399','#60a5fa'];
+const TOKEN_COLORS = {
+  input:          'rgba(72,160,199,0.85)',   // blue
+  output:         'rgba(217,119,87,0.85)',    // accent / coral
+  cache_read:     'rgba(116,201,145,0.75)',   // green
+  cache_creation: 'rgba(217,168,78,0.75)',    // amber
+};
+// Hover lifts on a dark theme: bars/series go to full opacity (a touch brighter).
+const TOKEN_HOVER = {
+  input:          'rgba(72,160,199,1)',
+  output:         'rgba(217,119,87,1)',
+  cache_read:     'rgba(116,201,145,1)',
+  cache_creation: 'rgba(217,168,78,1)',
+};
+// Donut / categorical palette — warm, Anthropic-leaning (clay, tan, sage, dusty
+// blue, mauve, ochre, taupe, terracotta) rather than a saturated rainbow.
+const MODEL_COLORS = ['#D97757','#C9A26B','#7FA98C','#6E97A8','#B98AA0','#D9A84E','#A88B6A','#C2705A'];
+
+// Tooltip color swatches: solid fill, no border (Chart.js's default draws a
+// bordered box that looked offset/inconsistent). Lines use their solid stroke
+// color instead of the translucent area fill.
+Chart.defaults.color = C.axis;
+// multiKeyBackground defaults to white and is drawn behind each tooltip swatch,
+// peeking out as a thin white border on plain-box charts — make it transparent.
+Chart.defaults.plugins.tooltip.multiKeyBackground = 'transparent';
+Chart.defaults.plugins.tooltip.callbacks.labelColor = (ctx) => {
+  const ds = ctx.dataset || {};
+  let col = Array.isArray(ds.backgroundColor) ? ds.backgroundColor[ctx.dataIndex] : ds.backgroundColor;
+  if (ds.type === 'line') col = ds.borderColor;
+  return { borderColor: col, backgroundColor: col, borderWidth: 0 };
+};
+
+// Legend visibility must survive repaints (filter changes, auto-refresh, sort) —
+// the charts are destroyed and rebuilt each render, which otherwise resets any
+// series the user toggled off. We track hidden series by label per chart and
+// reapply on rebuild: dataset charts via `dataset.hidden`, the doughnut via
+// per-slice data visibility (see applyModelHidden).
+const hiddenSeries = { daily: new Set(), hourly: new Set(), project: new Set(), model: new Set() };
+function legendToggle(key) {
+  return (e, item, legend) => {
+    const ci = legend.chart;
+    const ds = ci.data.datasets[item.datasetIndex];
+    ds.hidden = !ds.hidden;
+    if (ds.hidden) hiddenSeries[key].add(ds.label); else hiddenSeries[key].delete(ds.label);
+    ci.update();
+  };
+}
 
 // ── Time range ─────────────────────────────────────────────────────────────
 const RANGE_LABELS = { 'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'prev-month': 'Previous Month', '7d': 'Last 7 Days', '30d': 'Last 30 Days', '90d': 'Last 90 Days', 'all': 'All Time' };
@@ -848,7 +909,7 @@ function renderStats(t) {
     { label: 'Output Tokens',  value: fmt(t.output),               sub: rangeLabel },
     { label: 'Cache Read',     value: fmt(t.cache_read),           sub: 'from prompt cache' },
     { label: 'Cache Creation', value: fmt(t.cache_creation),       sub: 'writes to prompt cache' },
-    { label: 'Est. Cost',      value: fmtCostBig(t.cost),          sub: 'API pricing, Apr 2026', color: '#4ade80' },
+    { label: 'Est. Cost',      value: fmtCostBig(t.cost),          sub: 'API pricing, May 2026', color: C.green },
   ];
   document.getElementById('stats-row').innerHTML = stats.map(s => `
     <div class="stat-card">
@@ -894,10 +955,11 @@ function renderHourlyChart(agg) {
   const ctx = document.getElementById('chart-hourly').getContext('2d');
   if (charts.hourly) charts.hourly.destroy();
 
-  const labels = agg.hours.map(h => (h.peak ? '⚡ ' : '') + formatHourLabel(h.hour));
+  const labels = agg.hours.map(h => formatHourLabel(h.hour));
   const turns  = agg.hours.map(h => h.avgTurns);
   const output = agg.hours.map(h => h.avgOutput);
-  const barColors = agg.hours.map(h => h.peak ? 'rgba(248,113,113,0.8)' : TOKEN_COLORS.input);
+  const barColors      = agg.hours.map(h => h.peak ? 'rgba(199,78,57,0.9)' : TOKEN_COLORS.input);
+  const barHoverColors = agg.hours.map(h => h.peak ? 'rgba(199,78,57,1)'   : TOKEN_HOVER.input);
 
   charts.hourly = new Chart(ctx, {
     data: {
@@ -906,19 +968,28 @@ function renderHourlyChart(agg) {
         {
           type: 'bar',
           label: 'Avg turns / hour',
+          hidden: hiddenSeries.hourly.has('Avg turns / hour'),
           data: turns,
           backgroundColor: barColors,
+          hoverBackgroundColor: barHoverColors,
+          pointStyle: 'rect',
           yAxisID: 'y',
           order: 2,
         },
         {
           type: 'line',
           label: 'Avg output tokens / hour',
+          hidden: hiddenSeries.hourly.has('Avg output tokens / hour'),
           data: output,
           borderColor: TOKEN_COLORS.output,
-          backgroundColor: 'rgba(167,139,250,0.15)',
+          backgroundColor: 'rgba(217,119,87,0.15)',
           borderWidth: 2,
           pointRadius: 2,
+          pointHoverRadius: 4,
+          pointHoverBackgroundColor: TOKEN_HOVER.output,
+          pointStyle: 'circle',
+          pointBackgroundColor: TOKEN_COLORS.output,
+          pointBorderColor: TOKEN_COLORS.output,
           tension: 0.3,
           yAxisID: 'y1',
           order: 1,
@@ -929,8 +1000,9 @@ function renderHourlyChart(agg) {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { labels: { color: '#8892a4', boxWidth: 12 } },
+        legend: { onClick: legendToggle('hourly'), labels: { color: C.axis, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
         tooltip: {
+          usePointStyle: true,
           callbacks: {
             title: (items) => {
               if (!items.length) return '';
@@ -949,9 +1021,9 @@ function renderHourlyChart(agg) {
         },
       },
       scales: {
-        x: { ticks: { color: '#8892a4', maxRotation: 0, autoSkip: false, font: { size: 10 } }, grid: { color: '#2a2d3a' } },
-        y:  { position: 'left',  beginAtZero: true, ticks: { color: '#8892a4', callback: v => v.toFixed(1) },     grid: { color: '#2a2d3a' }, title: { display: true, text: 'Avg turns / hour',         color: '#8892a4', font: { size: 11 } } },
-        y1: { position: 'right', beginAtZero: true, ticks: { color: '#8892a4', callback: v => fmt(v) }, grid: { drawOnChartArea: false },   title: { display: true, text: 'Avg output tokens / hour', color: '#8892a4', font: { size: 11 } } },
+        x: { ticks: { color: C.axis, maxRotation: 0, autoSkip: false, font: { size: 10 } }, grid: { color: C.border } },
+        y:  { position: 'left',  beginAtZero: true, ticks: { color: C.axis, callback: v => v.toFixed(1) },     grid: { color: C.border }, title: { display: true, text: 'Avg turns / hour',         color: C.axis, font: { size: 11 } } },
+        y1: { position: 'right', beginAtZero: true, ticks: { color: C.axis, callback: v => fmt(v) }, grid: { drawOnChartArea: false },   title: { display: true, text: 'Avg output tokens / hour', color: C.axis, font: { size: 11 } } },
       }
     }
   });
@@ -965,19 +1037,19 @@ function renderDailyChart(daily) {
     data: {
       labels: daily.map(d => d.day),
       datasets: [
-        { label: 'Input',          data: daily.map(d => d.input),          backgroundColor: TOKEN_COLORS.input,          stack: 'io',    yAxisID: 'y1' },
-        { label: 'Output',         data: daily.map(d => d.output),         backgroundColor: TOKEN_COLORS.output,         stack: 'io',    yAxisID: 'y1' },
-        { label: 'Cache Read',     data: daily.map(d => d.cache_read),     backgroundColor: TOKEN_COLORS.cache_read,     stack: 'cache', yAxisID: 'y' },
-        { label: 'Cache Creation', data: daily.map(d => d.cache_creation), backgroundColor: TOKEN_COLORS.cache_creation, stack: 'cache', yAxisID: 'y' },
+        { label: 'Input',          hidden: hiddenSeries.daily.has('Input'),          data: daily.map(d => d.input),          backgroundColor: TOKEN_COLORS.input,          hoverBackgroundColor: TOKEN_HOVER.input,          stack: 'io',    yAxisID: 'y1' },
+        { label: 'Output',         hidden: hiddenSeries.daily.has('Output'),         data: daily.map(d => d.output),         backgroundColor: TOKEN_COLORS.output,         hoverBackgroundColor: TOKEN_HOVER.output,         stack: 'io',    yAxisID: 'y1' },
+        { label: 'Cache Read',     hidden: hiddenSeries.daily.has('Cache Read'),     data: daily.map(d => d.cache_read),     backgroundColor: TOKEN_COLORS.cache_read,     hoverBackgroundColor: TOKEN_HOVER.cache_read,     stack: 'cache', yAxisID: 'y' },
+        { label: 'Cache Creation', hidden: hiddenSeries.daily.has('Cache Creation'), data: daily.map(d => d.cache_creation), backgroundColor: TOKEN_COLORS.cache_creation, hoverBackgroundColor: TOKEN_HOVER.cache_creation, stack: 'cache', yAxisID: 'y' },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
-      plugins: { legend: { labels: { color: '#8892a4', boxWidth: 12 } } },
+      plugins: { legend: { onClick: legendToggle('daily'), labels: { color: C.axis, boxWidth: 12 } } },
       scales: {
-        x: { ticks: { color: '#8892a4', maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: '#2a2d3a' } },
-        y:  { position: 'left',  ticks: { color: '#74de80', callback: v => fmt(v) }, grid: { color: '#2a2d3a' }, title: { display: true, text: 'Cache', color: '#74de80' } },
-        y1: { position: 'right', ticks: { color: '#4f8ef7', callback: v => fmt(v) }, grid: { drawOnChartArea: false },    title: { display: true, text: 'Input / Output', color: '#4f8ef7' } },
+        x: { ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
+        y:  { position: 'left',  ticks: { color: C.green, callback: v => fmt(v) }, grid: { color: C.border }, title: { display: true, text: 'Cache', color: C.green } },
+        y1: { position: 'right', ticks: { color: C.blue, callback: v => fmt(v) }, grid: { drawOnChartArea: false },    title: { display: true, text: 'Input / Output', color: C.blue } },
       }
     }
   });
@@ -991,16 +1063,31 @@ function renderModelChart(byModel) {
     type: 'doughnut',
     data: {
       labels: byModel.map(m => m.model),
-      datasets: [{ data: byModel.map(m => m.input + m.output), backgroundColor: MODEL_COLORS, borderWidth: 2, borderColor: '#1a1d27' }]
+      datasets: [{ data: byModel.map(m => m.input + m.output), backgroundColor: MODEL_COLORS, hoverBackgroundColor: MODEL_COLORS, hoverOffset: 8, borderWidth: 2, borderColor: C.card, hoverBorderColor: C.card }]
     },
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#8892a4', boxWidth: 12, font: { size: 11 } } },
+        legend: {
+          position: 'bottom',
+          labels: { color: C.axis, boxWidth: 12, font: { size: 11 } },
+          onClick: (e, item, legend) => {
+            const ci = legend.chart;
+            ci.toggleDataVisibility(item.index);
+            const label = ci.data.labels[item.index];
+            if (!ci.getDataVisibility(item.index)) hiddenSeries.model.add(label); else hiddenSeries.model.delete(label);
+            ci.update();
+          },
+        },
         tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${fmt(ctx.raw)} tokens` } }
       }
     }
   });
+  // Reapply any slices the user toggled off in a previous render.
+  byModel.forEach((m, i) => {
+    if (hiddenSeries.model.has(m.model) && charts.model.getDataVisibility(i)) charts.model.toggleDataVisibility(i);
+  });
+  charts.model.update();
 }
 
 function renderProjectChart(byProject) {
@@ -1013,16 +1100,16 @@ function renderProjectChart(byProject) {
     data: {
       labels: top.map(p => p.project.length > 22 ? '\u2026' + p.project.slice(-20) : p.project),
       datasets: [
-        { label: 'Input',  data: top.map(p => p.input),  backgroundColor: TOKEN_COLORS.input },
-        { label: 'Output', data: top.map(p => p.output), backgroundColor: TOKEN_COLORS.output },
+        { label: 'Input',  hidden: hiddenSeries.project.has('Input'),  data: top.map(p => p.input),  backgroundColor: TOKEN_COLORS.input,  hoverBackgroundColor: TOKEN_HOVER.input },
+        { label: 'Output', hidden: hiddenSeries.project.has('Output'), data: top.map(p => p.output), backgroundColor: TOKEN_COLORS.output, hoverBackgroundColor: TOKEN_HOVER.output },
       ]
     },
     options: {
       indexAxis: 'y', responsive: true, maintainAspectRatio: false, resizeDelay: 150,
-      plugins: { legend: { labels: { color: '#8892a4', boxWidth: 12 } } },
+      plugins: { legend: { onClick: legendToggle('project'), labels: { color: C.axis, boxWidth: 12 } } },
       scales: {
-        x: { ticks: { color: '#8892a4', callback: v => fmt(v) }, grid: { color: '#2a2d3a' } },
-        y: { ticks: { color: '#8892a4', font: { size: 11 } }, grid: { color: '#2a2d3a' } },
+        x: { ticks: { color: C.axis, callback: v => fmt(v) }, grid: { color: C.border } },
+        y: { ticks: { color: C.axis, font: { size: 11 } }, grid: { color: C.border } },
       }
     }
   });
@@ -1325,11 +1412,11 @@ async function loadData() {
     const resp = await fetch('/api/data');
     const d = await resp.json();
     if (d.error) {
-      document.body.innerHTML = '<div style="padding:40px;color:#f87171">' + esc(d.error) + '</div>';
+      document.body.innerHTML = '<div style="padding:40px;color:#C74E39">' + esc(d.error) + '</div>';
       return;
     }
-    const refreshNote = rangeIncludesToday(selectedRange) ? ' \u00b7 Auto-refresh in 30s' : '';
-    document.getElementById('meta').textContent = 'Updated: ' + d.generated_at + refreshNote;
+    const refreshNote = rangeIncludesToday(selectedRange) ? '<br>Auto-refresh in 30s' : '';
+    document.getElementById('meta').innerHTML = 'Updated: ' + esc(d.generated_at) + refreshNote;
 
     const isFirstLoad = rawData === null;
     rawData = d;

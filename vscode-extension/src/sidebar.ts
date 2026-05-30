@@ -18,7 +18,13 @@ import { ServerManager } from "./server-manager";
  * (a Blob + `a.download` click) works inside the webview — without it Chromium
  * silently blocks the download.
  */
-export function renderHtml(url: string | null, statusText: string, nonce: string): string {
+export function renderHtml(
+  url: string | null,
+  statusText: string,
+  nonce: string,
+  iconUri = "",
+  cspSource = "",
+): string {
   if (url) {
     return `<!DOCTYPE html>
 <html lang="en">
@@ -28,7 +34,7 @@ export function renderHtml(url: string | null, statusText: string, nonce: string
       content="default-src 'none'; frame-src http://127.0.0.1:* http://localhost:*; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <title>Claude Usage</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; background: #191A1B; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #161617; }
   iframe { border: 0; width: 100%; height: 100vh; display: block; }
 </style>
 </head>
@@ -38,24 +44,31 @@ export function renderHtml(url: string | null, statusText: string, nonce: string
 </html>`;
   }
 
+  // Status / loading pane — styled to match the dashboard header (same icon,
+  // title, and elevated-palette colors) so the cold-start screen doesn't jar.
+  const imgSrc = cspSource ? ` img-src ${cspSource};` : "";
+  const logo = iconUri ? `<span class="logo"></span>` : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+      content="default-src 'none';${imgSrc} style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <title>Claude Usage</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #e2e8f0; background: #191A1B; padding: 24px; line-height: 1.5; }
-  h2 { color: #d97757; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 16px; }
-  pre { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 6px; padding: 12px; font-size: 12px; color: #8892a4; white-space: pre-wrap; word-break: break-word; max-width: 100%; }
-  p { color: #8892a4; font-size: 13px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #BFBFBF; background: #161617; padding: 24px; line-height: 1.5; }
+  .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; }
+  .brand .logo { width: 26px; height: 26px; flex-shrink: 0; background-color: #BFBFBF; -webkit-mask: url("${iconUri}") no-repeat center / contain; mask: url("${iconUri}") no-repeat center / contain; }
+  .brand h1 { font-size: 18px; font-weight: 600; color: #BFBFBF; margin: 0; }
+  p { color: #BFBFBF; font-size: 13px; margin: 0 0 8px; }
+  p.hint { color: #6F6F70; }
+  code { background: #1E1F20; border: 1px solid #2C2D2E; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
 </style>
 </head>
 <body>
-<h2>Claude Code Usage</h2>
+<div class="brand">${logo}<h1>Claude Code Usage</h1></div>
 <p>${escapeHtml(statusText) || "The dashboard server is not running yet."}</p>
-<p>Run <code>Claude Usage: Open Dashboard</code> from the command palette to start it.</p>
+<p class="hint">Run <code>Claude Usage: Open Dashboard</code> from the command palette to start it.</p>
 </body>
 </html>`;
 }
@@ -89,14 +102,27 @@ export class DashboardSidebar implements vscode.WebviewViewProvider {
   private currentUrl: string | null = null;
   private statusText = "";
   private readonly onShow: () => void;
+  private readonly extensionUri: vscode.Uri | undefined;
+  private iconUri = "";
+  private cspSource = "";
 
-  constructor(onShow: () => void = () => {}) {
+  constructor(onShow: () => void = () => {}, extensionUri?: vscode.Uri) {
     this.onShow = onShow;
+    this.extensionUri = extensionUri;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true };
+    // Resolve a webview-safe URI for the bundled icon so the status pane shows
+    // the same logo as the dashboard header. Guarded so node-only tests (whose
+    // fake view has no asWebviewUri / no vscode.Uri) don't blow up.
+    if (this.extensionUri && typeof view.webview.asWebviewUri === "function") {
+      this.iconUri = view.webview
+        .asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "resources", "icon.svg"))
+        .toString();
+      this.cspSource = view.webview.cspSource ?? "";
+    }
     this.render();
     view.onDidDispose(() => {
       this.view = undefined;
@@ -127,7 +153,7 @@ export class DashboardSidebar implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (!this.view) return;
-    this.view.webview.html = renderHtml(this.currentUrl, this.statusText, makeNonce());
+    this.view.webview.html = renderHtml(this.currentUrl, this.statusText, makeNonce(), this.iconUri, this.cspSource);
   }
 }
 
