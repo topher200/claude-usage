@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.6 — TBD
+
+### Project / docs
+
+- Bumped GitHub Actions to their Node 24-era major versions across all workflows (`actions/checkout@v5`, `actions/setup-node@v5`, `actions/setup-python@v6`, `actions/upload-artifact@v5`), ahead of GitHub forcing Node 24 on the runners (Node 20 actions are deprecated from 2026-06-16).
+
 ## v1.2.5 — 2026-06-15
 
 ### Scanner / CLI

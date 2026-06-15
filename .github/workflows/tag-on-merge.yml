@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Need enough history to diff the whole push range (`before..after`)
           # not just the tip commit. fetch-depth: 0 = full clone; small repo,
@@ -103,7 +103,7 @@ jobs:
 
       - name: Set up Node (to build the .vsix)
         if: steps.detect.outputs.version != ''
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: "npm"
