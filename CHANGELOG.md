@@ -7,6 +7,7 @@
 - Added an explicit `claude-opus-4-8` entry to both pricing tables and pointed the generic `opus` fallback at it (was 4.7). 4.8 already costed correctly via the substring fallback — this guards against silent mis-costing if 4.8 is ever repriced, and keeps the catch-all on the newest Opus (#133, #134, thanks @Ninhache).
 - Added the `claude-fable-5`, `claude-mythos-5`, and `claude-opus-4-8` rows to the README cost table (they were already in the live CLI/dashboard tables) and listed `fable` / `mythos` in the README's "included models" note, so the docs match the code.
 - Unified the pricing "as of" date to **June 2026** everywhere — the dashboard footer, the in-chart cost sublabel, the pricing code comment, and the README were inconsistently labelled April/May.
+- Made the Rescan button non-destructive: `/api/rescan` now runs an incremental scan instead of deleting `usage.db` and rebuilding from scratch. `usage.db` is the only durable record of usage once Claude Code prunes old transcripts (`cleanupPeriodDays`), so the old wipe-and-rebuild could permanently lose history that was no longer on disk. The button stays (it's the only in-session way to ingest new turns); its tooltip now reflects the additive behaviour (#138, thanks @OtoGodfrey).
 
 ### Project / docs
 

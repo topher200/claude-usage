@@ -269,7 +269,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <h1>Claude Code Usage</h1>
   </div>
   <div class="meta" id="meta">Loading...</div>
-  <button id="rescan-btn" onclick="triggerRescan()" title="Rebuild the database from scratch by re-scanning all JSONL files. Use if data looks stale or costs seem wrong.">&#x21bb; Rescan</button>
+  <button id="rescan-btn" onclick="triggerRescan()" title="Scan for new usage since the last update. Adds new turns without affecting existing history.">&#x21bb; Rescan</button>
 </header>
 
 <div id="filter-bar">
@@ -1545,14 +1545,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         if path == "/api/rescan":
-            # Full rebuild: delete DB and rescan from scratch.
+            # Incremental scan: ingest new/changed JSONL without touching
+            # existing rows. The DB is append-only and the only durable store
+            # of history once Claude Code prunes old transcripts, so we must
+            # never delete it here — scan() dedupes via the message_id index.
             # Pass DB_PATH / DEFAULT_PROJECTS_DIRS explicitly so tests that
             # patch the module globals are honored (scan's defaults are
             # frozen at def time and would otherwise target the real paths).
             import scanner
             db_path = DB_PATH
-            if db_path.exists():
-                db_path.unlink()
             result = scanner.scan(
                 db_path=db_path,
                 projects_dirs=scanner.DEFAULT_PROJECTS_DIRS,

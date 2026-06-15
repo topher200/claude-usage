@@ -255,8 +255,8 @@ class TestDashboardHTTP(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Redirect DB_PATH + projects dirs to a tempdir so /api/rescan
-        # doesn't unlink the user's real ~/.claude/usage.db or scan their
-        # real transcript directory during tests.
+        # writes to a throwaway DB and scans a throwaway transcript dir
+        # instead of the user's real ~/.claude/usage.db and transcripts.
         import dashboard as _d
         import scanner as _s
         cls._tmpdir = tempfile.TemporaryDirectory()
@@ -327,6 +327,53 @@ class TestDashboardHTTP(unittest.TestCase):
             self.assertIn("new", data)
             self.assertIn("updated", data)
             self.assertIn("skipped", data)
+
+    def test_api_rescan_is_non_destructive(self):
+        # Regression (#138): /api/rescan must NOT wipe the DB. usage.db is the
+        # only durable store of history once Claude Code prunes old transcripts
+        # (cleanupPeriodDays), so a rescan with nothing left on disk must keep
+        # the existing rows. Seed history that has no corresponding JSONL file
+        # (the projects dir is empty), rescan, and assert it survives.
+        import dashboard as _d
+        db_path = _d.DB_PATH
+        conn = get_db(db_path)
+        init_db(conn)
+        upsert_sessions(conn, [{
+            "session_id": "pruned-sess", "project_name": "user/oldproject",
+            "first_timestamp": "2026-01-01T09:00:00Z",
+            "last_timestamp": "2026-01-01T10:00:00Z",
+            "git_branch": "main", "model": "claude-opus-4-8",
+            "total_input_tokens": 1000, "total_output_tokens": 400,
+            "total_cache_read": 0, "total_cache_creation": 0,
+            "turn_count": 1,
+        }])
+        insert_turns(conn, [{
+            "session_id": "pruned-sess", "timestamp": "2026-01-01T09:30:00Z",
+            "model": "claude-opus-4-8", "input_tokens": 1000,
+            "output_tokens": 400, "cache_read_tokens": 0,
+            "cache_creation_tokens": 0, "tool_name": None, "cwd": "/tmp",
+            "message_id": "msg-pruned-1",
+        }])
+        conn.commit()
+        conn.close()
+
+        url = f"http://127.0.0.1:{self.port}/api/rescan"
+        req = urllib.request.Request(url, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            turn_count = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id = 'pruned-sess'"
+            ).fetchone()[0]
+            sess_count = conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE session_id = 'pruned-sess'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(turn_count, 1, "rescan must not delete existing turns")
+        self.assertEqual(sess_count, 1, "rescan must not delete existing sessions")
 
     def test_404_for_unknown_path(self):
         url = f"http://127.0.0.1:{self.port}/nonexistent"
