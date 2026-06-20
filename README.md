@@ -60,6 +60,18 @@ cd claude-usage
 python cli.py dashboard
 ```
 
+### Docker
+```
+git clone https://github.com/phuryn/claude-usage
+cd claude-usage
+bash scripts/run-docker.sh
+```
+
+Opens the dashboard at **http://localhost:9898**.
+
+The script builds the image, then runs the container with:
+- `~/.claude` mounted **read-only** — the container can read your transcripts but cannot modify them
+- A named Docker volume (`claude-usage-data`) for the SQLite database — persisted across restarts, isolated from your home directory
 
 ---
 
@@ -155,3 +167,5 @@ See [vscode-extension/README.md](vscode-extension/README.md) for settings, comma
 | `cli.py` | `scan`, `today`, `stats`, `dashboard` commands |
 | `Formula/claude-usage.rb` | Homebrew formula — install with `brew install --formula <raw-url>` |
 | `vscode-extension/` | VS Code extension — embeds the dashboard inside VS Code |
+| `Dockerfile` | Container image definition |
+| `scripts/run-docker.sh` | Build and run the dashboard in Docker with a read-only `~/.claude` mount |
