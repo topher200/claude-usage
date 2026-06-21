@@ -1947,7 +1947,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif path == "/api/data":
-            data = get_dashboard_data()
+            # Pass DB_PATH explicitly: get_dashboard_data's default arg is frozen
+            # to the original module global at def time, so a bare call would ignore
+            # a monkey-patched dashboard.DB_PATH (same contract as /api/rescan). This
+            # also keeps the dashboard reading the configured DB rather than a stale
+            # path captured at import.
+            data = get_dashboard_data(DB_PATH)
             body = json.dumps(data).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
