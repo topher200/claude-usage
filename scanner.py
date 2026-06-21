@@ -19,7 +19,7 @@ VERSION = "1.4.0"
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 XCODE_PROJECTS_DIR = Path.home() / "Library" / "Developer" / "Xcode" / "CodingAssistant" / "ClaudeAgentConfig" / "projects"
-DB_PATH = Path.home() / ".claude" / "usage.db"
+DB_PATH = Path(os.environ.get("CLAUDE_USAGE_DB", Path.home() / ".claude" / "usage.db"))
 DEFAULT_PROJECTS_DIRS = [PROJECTS_DIR, XCODE_PROJECTS_DIR]
 
 # Higher number = higher priority when choosing a session's primary model.

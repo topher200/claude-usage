@@ -16,7 +16,7 @@ from datetime import datetime, date, timedelta
 
 from scanner import VERSION
 
-DB_PATH = Path.home() / ".claude" / "usage.db"
+DB_PATH = Path(os.environ.get("CLAUDE_USAGE_DB", Path.home() / ".claude" / "usage.db"))
 
 PRICING = {
     # Fable / Mythos — Anthropic's most capable class, priced at 2x Opus.

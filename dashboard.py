@@ -12,7 +12,7 @@ from datetime import datetime
 
 from scanner import VERSION
 
-DB_PATH = Path.home() / ".claude" / "usage.db"
+DB_PATH = Path(os.environ.get("CLAUDE_USAGE_DB", Path.home() / ".claude" / "usage.db"))
 
 # Which surface is rendering the dashboard: "web" (standalone `cli.py dashboard`)
 # or "vscode" (embedded in the extension's sidebar webview). serve() sets this
