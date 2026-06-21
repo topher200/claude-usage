@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime
 
-from scanner import VERSION
+from scanner import VERSION, init_db
 
 DB_PATH = Path(os.environ.get("CLAUDE_USAGE_DB", Path.home() / ".claude" / "usage.db"))
 
@@ -34,6 +34,14 @@ def get_dashboard_data(db_path=DB_PATH):
     # Wait briefly for write locks instead of raising "database is locked".
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
+    # Ensure the schema is current before querying. cmd_dashboard binds and serves
+    # *before* its background scan runs init_db, so on the first load after an
+    # upgrade a pre-existing DB may still be on the old schema — the subagent
+    # queries below reference the `agents` table and the `is_subagent`/`agent_id`
+    # columns and would raise "no such table: agents" until the scan caught up.
+    # init_db is idempotent (CREATE ... IF NOT EXISTS + additive column checks),
+    # so this is a cheap no-op once migrated.
+    init_db(conn)
 
     # ── All models (for filter UI) ────────────────────────────────────────────
     # GROUP BY uses the normalised expression too so NULL and '' don't end up
@@ -190,7 +198,6 @@ def get_dashboard_data(db_path=DB_PATH):
         GROUP BY t.agent_id
         ORDER BY (SUM(t.input_tokens) + SUM(t.output_tokens)
                   + SUM(t.cache_read_tokens) + SUM(t.cache_creation_tokens)) DESC
-        LIMIT 50
     """).fetchall()
 
     top_dispatches = [{
@@ -445,16 +452,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
   <div class="table-card">
-    <div class="section-title">Top Subagent Dispatches <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">&middot; ranked by total tokens; <em>unknown</em> = parent dispatch record not found</span></div>
-    <table>
-      <thead><tr>
-        <th>Type</th><th>Started</th><th>Model</th><th>Turns</th><th>Tool Uses</th>
-        <th>Duration</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Tokens</th><th>Est. Cost</th>
-      </tr></thead>
-      <tbody id="dispatches-body"></tbody>
-    </table>
-  </div>
-  <div class="table-card">
     <div class="section-title">Cost by Model</div>
     <table>
       <thead><tr>
@@ -469,6 +466,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <tbody id="model-cost-body"></tbody>
     </table>
     <div class="table-foot" id="model-cost-foot"></div>
+  </div>
+  <div class="table-card">
+    <div class="section-header"><div class="section-title">Top Subagent Dispatches <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">&middot; ranked by total tokens; <em>unknown</em> = parent dispatch record not found</span></div><button class="export-btn" onclick="exportDispatchesCSV()" title="Export all filtered subagent dispatches to CSV">&#x2913; CSV</button></div>
+    <table>
+      <thead><tr>
+        <th>Type</th><th>Started</th><th>Model</th><th>Turns</th><th>Tool Uses</th>
+        <th>Duration</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Tokens</th><th>Est. Cost</th>
+      </tr></thead>
+      <tbody id="dispatches-body"></tbody>
+    </table>
+    <div class="table-foot" id="dispatches-foot"></div>
   </div>
   <div class="table-card">
     <div class="section-header"><div class="section-title">Recent Sessions</div><button class="export-btn" onclick="exportSessionsCSV()" title="Export all filtered sessions to CSV">&#x2913; CSV</button></div>
@@ -560,6 +568,7 @@ let lastFilteredSessions = [];
 let lastByModel = [];
 let lastByProject = [];
 let lastByProjectBranch = [];
+let lastFilteredDispatches = [];
 let sessionSortDir = 'desc';
 
 // Tables reveal rows in steps: 10 -> 25 -> 50, capped at 50 because rendering
@@ -580,6 +589,7 @@ let modelLimit = TABLE_STEPS[0];
 let sessionsLimit = TABLE_STEPS[0];
 let projectLimit = TABLE_STEPS[0];
 let branchLimit = TABLE_STEPS[0];
+let dispatchesLimit = TABLE_STEPS[0];
 let hourlyTZ = 'local';  // 'local' or 'utc'
 
 // ── Peak-hour config ───────────────────────────────────────────────────────
@@ -1165,10 +1175,12 @@ function applyFilter() {
     (b.input + b.output + b.cache_read + b.cache_creation) -
     (a.input + a.output + a.cache_read + a.cache_creation));
 
-  // Top dispatches: filter by range + selected model, take top 20
+  // Top dispatches: filter by range + selected model. Keep the full filtered set
+  // (already ranked by tokens server-side) so the table can page it like Recent
+  // Sessions — show more/less plus CSV export of everything.
   const filteredDispatches = (rawData.top_dispatches || []).filter(d =>
     selectedModels.has(d.model) && (!start || d.start_date >= start) && (!end || d.start_date <= end)
-  ).slice(0, 20);
+  );
 
   // Update daily chart title
   document.getElementById('daily-chart-title').textContent = 'Daily Token Usage \u2014 ' + RANGE_LABELS[selectedRange];
@@ -1181,7 +1193,8 @@ function applyFilter() {
   renderModelChart(byModel);
   renderProjectChart(byProject);
   renderSubagentChart(byAgentType);
-  renderTopDispatches(filteredDispatches);
+  lastFilteredDispatches = filteredDispatches;
+  renderTopDispatches(lastFilteredDispatches);
   lastFilteredSessions = sortSessions(filteredSessions);
   lastByModel = byModel;
   lastByProject = sortProjects(byProject);
@@ -1449,9 +1462,11 @@ function renderTopDispatches(rows) {
   const body = document.getElementById('dispatches-body');
   if (!rows.length) {
     body.innerHTML = '<tr><td colspan="11" class="muted" style="text-align:center;padding:24px">No subagent dispatches in selected range.</td></tr>';
+    renderTableToggle('dispatches-foot', 0, dispatchesLimit, 'lessDispatchRows', 'moreDispatchRows', 'exportDispatchesCSV');
     return;
   }
-  body.innerHTML = rows.map(d => {
+  const shown = rows.slice(0, dispatchesLimit);
+  body.innerHTML = shown.map(d => {
     const tokensTotal = d.input + d.output + d.cache_read + d.cache_creation;
     const cost = calcCost(d.model, d.input, d.output, d.cache_read, d.cache_creation);
     const costCell = isBillable(d.model)
@@ -1473,6 +1488,7 @@ function renderTopDispatches(rows) {
       ${costCell}
     </tr>`;
   }).join('');
+  renderTableToggle('dispatches-foot', rows.length, dispatchesLimit, 'lessDispatchRows', 'moreDispatchRows', 'exportDispatchesCSV');
 }
 
 // Fills a table card's footer with the row-reveal control. Three states:
@@ -1517,6 +1533,8 @@ function moreProjectRows() { projectLimit  = nextTableLimit(projectLimit,  lastB
 function lessProjectRows() { projectLimit  = TABLE_STEPS[0]; renderProjectCostTable(lastByProject);        scrollTableToTop('project-cost-body'); }
 function moreBranchRows()  { branchLimit   = nextTableLimit(branchLimit,   lastByProjectBranch.length); renderProjectBranchCostTable(lastByProjectBranch); }
 function lessBranchRows()  { branchLimit   = TABLE_STEPS[0]; renderProjectBranchCostTable(lastByProjectBranch); scrollTableToTop('project-branch-cost-body'); }
+function moreDispatchRows(){ dispatchesLimit = nextTableLimit(dispatchesLimit, lastFilteredDispatches.length); renderTopDispatches(lastFilteredDispatches); }
+function lessDispatchRows(){ dispatchesLimit = TABLE_STEPS[0]; renderTopDispatches(lastFilteredDispatches);            scrollTableToTop('dispatches-body'); }
 
 function renderSessionsTable(sessions) {
   const shown = sessions.slice(0, sessionsLimit);
@@ -1657,16 +1675,18 @@ function updateProjectBranchSortIcons() {
 }
 
 function sortProjectBranch(rows) {
+  // Sort by the selected column (default: cost desc), consistent with the Cost by
+  // Model / Cost by Project tables. Project name is only a stable tiebreaker when
+  // the sorted column ties, so a project's branches stay grouped & deterministic
+  // without overriding the primary order.
   return [...rows].sort((a, b) => {
-    const pa = (a.project || '').toLowerCase();
-    const pb = (b.project || '').toLowerCase();
-    if (pa < pb) return -1;
-    if (pa > pb) return 1;
     const av = a[branchSortCol] ?? 0;
     const bv = b[branchSortCol] ?? 0;
     if (av < bv) return branchSortDir === 'desc' ? 1 : -1;
     if (av > bv) return branchSortDir === 'desc' ? -1 : 1;
-    return 0;
+    const pa = (a.project || '').toLowerCase();
+    const pb = (b.project || '').toLowerCase();
+    return pa < pb ? -1 : pa > pb ? 1 : 0;
   });
 }
 
@@ -1747,6 +1767,18 @@ function exportProjectBranchCSV() {
     return [pb.project, pb.branch, pb.sessions, pb.turns, pb.input, pb.output, pb.cache_read, pb.cache_creation, pb.cost.toFixed(4)];
   });
   downloadCSV('projects_by_branch', header, rows);
+}
+
+function exportDispatchesCSV() {
+  const header = ['Type', 'Agent ID', 'Started', 'Model', 'Turns', 'Tool Uses', 'Duration (ms)', 'Input', 'Output', 'Cache Read', 'Cache Creation', 'Total Tokens', 'Est. Cost', 'Status'];
+  const rows = lastFilteredDispatches.map(d => {
+    const total = d.input + d.output + d.cache_read + d.cache_creation;
+    const cost = calcCost(d.model, d.input, d.output, d.cache_read, d.cache_creation);
+    return [d.agent_type, d.agent_id, d.start, d.model, d.turns,
+            d.tool_uses != null ? d.tool_uses : '', d.duration_ms != null ? d.duration_ms : '',
+            d.input, d.output, d.cache_read, d.cache_creation, total, cost.toFixed(4), d.status || ''];
+  });
+  downloadCSV('subagent_dispatches', header, rows);
 }
 
 // ── Rescan ────────────────────────────────────────────────────────────────

@@ -5,6 +5,9 @@
 ### Dashboard
 
 - Added subagent attribution views: a **Subagent Tokens by Type** stacked bar chart and a **Top Subagent Dispatches** table, plus a Subagent Tokens stat card. Dispatched Task/Agent subagents (and Claude Code's auto-compaction) are surfaced separately while remaining included in the overall totals; both respect the existing model + range filters. All dynamic values are escaped via `esc()` (#140, thanks @john988).
+- The **Top Subagent Dispatches** table now behaves like Recent Sessions: it pages with Show more / Show less and exports all filtered rows to CSV, and it was moved below the Cost by Model table. The full ranked set is now sent to the client (previously capped at 50 server-side).
+- Fixed **Cost by Project & Branch** default ordering: it now sorts by cost (descending) like the other cost tables, instead of grouping alphabetically by project name. Project name is kept only as a tiebreaker, and column sorting now matches the sibling tables.
+- Fixed a crash on `/api/data` (`no such table: agents`) that could appear on the first dashboard load right after upgrading — the server serves before its background scan migrates the DB, so `get_dashboard_data` now migrates the schema on read (idempotent) before running the subagent queries.
 
 ### Scanner / CLI
 

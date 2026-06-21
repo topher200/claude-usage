@@ -1,5 +1,6 @@
 """Tests for the dashboard's subagent data layer (get_dashboard_data)."""
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,6 +73,50 @@ class TestDashboardSubagentData(unittest.TestCase):
         # Only the 2 subagent turns contribute; the main turn must not appear.
         total_turns = sum(r["turns"] for r in d["subagent_by_type"])
         self.assertEqual(total_turns, 2)
+
+
+class TestDashboardOnUnmigratedDB(unittest.TestCase):
+    """Regression: get_dashboard_data must not crash on a pre-v1.5.0 schema.
+
+    cmd_dashboard binds and serves *before* its background scan runs init_db, so
+    on the first load after upgrading, a pre-existing DB may still lack the
+    `agents` table and `is_subagent`/`agent_id` columns the subagent queries use.
+    get_dashboard_data calls init_db itself to migrate-on-read, so it should
+    return data (empty subagent sections) instead of raising "no such table".
+    """
+
+    def setUp(self):
+        self.db_path = Path(tempfile.mkdtemp()) / "usage.db"
+        conn = sqlite3.connect(self.db_path)
+        # Old schema: turns WITHOUT is_subagent/agent_id, and NO agents table.
+        conn.executescript("""
+            CREATE TABLE turns (
+                session_id TEXT, timestamp TEXT, model TEXT,
+                input_tokens INTEGER, output_tokens INTEGER,
+                cache_read_tokens INTEGER, cache_creation_tokens INTEGER,
+                tool_name TEXT, cwd TEXT, message_id TEXT
+            );
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY, project_name TEXT,
+                first_timestamp TEXT, last_timestamp TEXT, git_branch TEXT,
+                model TEXT, total_input_tokens INTEGER, total_output_tokens INTEGER,
+                total_cache_read INTEGER, total_cache_creation INTEGER, turn_count INTEGER
+            );
+        """)
+        conn.execute(
+            "INSERT INTO turns VALUES ('s1','2026-04-08T10:00:00Z','claude-opus-4-8',"
+            "100,50,0,0,NULL,'/home/user/proj','m1')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_does_not_crash_and_returns_empty_subagent_data(self):
+        d = dashboard.get_dashboard_data(self.db_path)
+        self.assertNotIn("error", d)
+        self.assertEqual(d["subagent_by_type"], [])
+        self.assertEqual(d["top_dispatches"], [])
+        # The pre-existing main turn still renders in the normal sections.
+        self.assertIn("claude-opus-4-8", d["all_models"])
 
 
 if __name__ == "__main__":
