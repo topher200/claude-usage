@@ -28,7 +28,11 @@ Cost estimates use Anthropic's published API pricing (actual Max/Pro costs diffe
 
 ### From the VS Code Marketplace
 
-Search the Extensions sidebar for **"Claude Code Usage"** (publisher: `PawelHuryn`), or open the marketplace link from the Open VSX page.
+Search the Extensions sidebar for **"Claude Code Usage"** (publisher: `PawelHuryn`), or open it directly:
+
+[**Install from the VS Code Marketplace →**](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.claude-usage-phuryn)
+
+[**See in Open VSX Registry →**](https://open-vsx.org/extension/PawelHuryn/claude-usage-phuryn)
 
 ### From a prebuilt `.vsix` (no build step)
 

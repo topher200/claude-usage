@@ -9,6 +9,8 @@ Claude Code writes detailed usage logs locally — token counts, models, session
 
 ![Claude Usage Dashboard](docs/screenshot.png)
 
+Available as a **web app** (`python cli.py dashboard`) and as a [**VS Code extension**](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.claude-usage-phuryn).
+
 **Created by:** [The Product Compass Newsletter](https://www.productcompass.pm)
 
 ---
@@ -148,6 +150,8 @@ Costs are calculated using **Anthropic API pricing as of June 2026** ([claude.co
 If you'd rather see the dashboard inside your editor, the same UI is available as a VS Code extension. Same data, same charts, embedded as an activity-bar sidebar.
 
 [**Install from the VS Code Marketplace →**](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.claude-usage-phuryn)
+
+[**See in Open VSX Registry →**](https://open-vsx.org/extension/PawelHuryn/claude-usage-phuryn)
 
 ![VS Code extension — daily usage](docs/usage1.png)
 ![VS Code extension — hourly + projects](docs/usage2.png)
