@@ -60,7 +60,8 @@ def init_db(conn):
             total_cache_read        INTEGER DEFAULT 0,
             total_cache_creation    INTEGER DEFAULT 0,
             model           TEXT,
-            turn_count      INTEGER DEFAULT 0
+            turn_count      INTEGER DEFAULT 0,
+            topic           TEXT
         );
 
         CREATE TABLE IF NOT EXISTS turns (
@@ -111,6 +112,8 @@ def init_db(conn):
     _ensure_column(conn, "turns", "agent_id", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_subagent ON turns(is_subagent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_agent_id ON turns(agent_id)")
+    # Session topic (first user prompt, added in a later schema version)
+    _ensure_column(conn, "sessions", "topic", "TEXT")
     # Conditional unique index: only dedup non-null message IDs
     conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_message_id
@@ -124,6 +127,37 @@ def _ensure_column(conn, table, column, decl):
     cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+MAX_TOPIC_LENGTH = 100
+
+
+def _extract_user_topic(record):
+    """Extract the first real user prompt text from a user-type record.
+
+    Skips IDE context blocks (text starting with '<') such as
+    ``<ide_opened_file>`` or ``<ide_selection>`` injected by the VS Code
+    extension, returning only genuine user input.
+    """
+    msg = record.get("message")
+    if not isinstance(msg, dict):
+        return None
+    for block in msg.get("content", []):
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = (block.get("text") or "").strip()
+            if text and not text.startswith("<"):
+                return text[:MAX_TOPIC_LENGTH]
+    return None
+
+
+def _extract_title(record):
+    """Extract a session title from a custom-title or ai-title record."""
+    rtype = record.get("type")
+    if rtype == "custom-title":
+        return record.get("customTitle")
+    if rtype == "ai-title":
+        return record.get("aiTitle")
+    return None
 
 
 def project_name_from_cwd(cwd):
@@ -244,11 +278,32 @@ def parse_jsonl_file(filepath):
                     continue
 
                 rtype = record.get("type")
-                if rtype not in ("assistant", "user"):
+                if rtype not in ("assistant", "user", "custom-title", "ai-title"):
                     continue
 
                 session_id = record.get("sessionId")
                 if not session_id:
+                    continue
+
+                # Extract session title from title records
+                title = _extract_title(record)
+                if title:
+                    if session_id not in session_meta:
+                        session_meta[session_id] = {
+                            "session_id": session_id,
+                            "project_name": "unknown",
+                            "first_timestamp": "",
+                            "last_timestamp": "",
+                            "git_branch": "",
+                            "model": None,
+                            "topic": None,
+                        }
+                    meta = session_meta[session_id]
+                    # custom-title always wins; ai-title only if no custom-title set
+                    if rtype == "custom-title":
+                        meta["topic"] = title
+                    elif rtype == "ai-title" and not meta.get("topic"):
+                        meta["topic"] = title
                     continue
 
                 if rtype == "user":
@@ -269,6 +324,7 @@ def parse_jsonl_file(filepath):
                         "last_timestamp": timestamp,
                         "git_branch": git_branch,
                         "model": None,
+                        "topic": None,
                     }
                 else:
                     meta = session_meta[session_id]
@@ -278,6 +334,12 @@ def parse_jsonl_file(filepath):
                         meta["last_timestamp"] = timestamp
                     if git_branch and not meta["git_branch"]:
                         meta["git_branch"] = git_branch
+
+                # Fall back to first user prompt if no title record exists
+                if rtype == "user" and not session_meta[session_id].get("topic"):
+                    topic = _extract_user_topic(record)
+                    if topic:
+                        session_meta[session_id]["topic"] = topic
 
                 if rtype == "assistant":
                     msg = record.get("message", {})
@@ -383,27 +445,34 @@ def upsert_sessions(conn, sessions):
                 INSERT INTO sessions
                     (session_id, project_name, first_timestamp, last_timestamp,
                      git_branch, total_input_tokens, total_output_tokens,
-                     total_cache_read, total_cache_creation, model, turn_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     total_cache_read, total_cache_creation, model, turn_count,
+                     topic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 s["session_id"], s["project_name"], s["first_timestamp"],
                 s["last_timestamp"], s["git_branch"],
                 s["total_input_tokens"], s["total_output_tokens"],
                 s["total_cache_read"], s["total_cache_creation"],
-                s["model"], s["turn_count"]
+                s["model"], s["turn_count"], s.get("topic")
             ))
         else:
             # Update: add new tokens on top of existing (since we only insert new turns)
             # Keep the highest-priority model (e.g. opus over haiku from subagents)
-            existing_model = conn.execute(
-                "SELECT model FROM sessions WHERE session_id = ?",
+            existing_row = conn.execute(
+                "SELECT model, topic FROM sessions WHERE session_id = ?",
                 (s["session_id"],)
-            ).fetchone()["model"]
+            ).fetchone()
+            existing_model = existing_row["model"]
             new_model = s["model"]
             if _model_priority(new_model) > _model_priority(existing_model):
                 model_to_set = new_model
             else:
                 model_to_set = existing_model
+
+            # Update topic if the new scan found one and the existing is empty
+            new_topic = s.get("topic")
+            existing_topic = existing_row["topic"]
+            topic_to_set = new_topic if new_topic else existing_topic
 
             conn.execute("""
                 UPDATE sessions SET
@@ -413,13 +482,14 @@ def upsert_sessions(conn, sessions):
                     total_cache_read = total_cache_read + ?,
                     total_cache_creation = total_cache_creation + ?,
                     turn_count = turn_count + ?,
-                    model = ?
+                    model = ?,
+                    topic = ?
                 WHERE session_id = ?
             """, (
                 s["last_timestamp"],
                 s["total_input_tokens"], s["total_output_tokens"],
                 s["total_cache_read"], s["total_cache_creation"],
-                s["turn_count"], model_to_set,
+                s["turn_count"], model_to_set, topic_to_set,
                 s["session_id"]
             ))
 
@@ -524,11 +594,31 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                             continue
 
                         rtype = record.get("type")
-                        if rtype not in ("assistant", "user"):
+                        if rtype not in ("assistant", "user", "custom-title", "ai-title"):
                             continue
 
                         session_id = record.get("sessionId")
                         if not session_id:
+                            continue
+
+                        # Extract session title from title records
+                        title = _extract_title(record)
+                        if title:
+                            if session_id not in new_session_metas:
+                                new_session_metas[session_id] = {
+                                    "session_id": session_id,
+                                    "project_name": "unknown",
+                                    "first_timestamp": "",
+                                    "last_timestamp": "",
+                                    "git_branch": "",
+                                    "model": None,
+                                    "topic": None,
+                                }
+                            meta = new_session_metas[session_id]
+                            if rtype == "custom-title":
+                                meta["topic"] = title
+                            elif rtype == "ai-title" and not meta.get("topic"):
+                                meta["topic"] = title
                             continue
 
                         if rtype == "user":
@@ -548,6 +638,7 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                                 "last_timestamp": timestamp,
                                 "git_branch": record.get("gitBranch", ""),
                                 "model": None,
+                                "topic": None,
                             }
                         else:
                             meta = new_session_metas[session_id]
@@ -555,6 +646,12 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                                 meta["last_timestamp"] = timestamp
                             if timestamp and (not meta["first_timestamp"] or timestamp < meta["first_timestamp"]):
                                 meta["first_timestamp"] = timestamp
+
+                        # Fall back to first user prompt if no title record exists
+                        if rtype == "user" and not new_session_metas[session_id].get("topic"):
+                            topic = _extract_user_topic(record)
+                            if topic:
+                                new_session_metas[session_id]["topic"] = topic
 
                         if rtype == "assistant":
                             msg = record.get("message", {})
