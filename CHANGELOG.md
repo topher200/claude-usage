@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.5.1 — TBD
+## v1.5.1 — 2026-07-01
 
 ### Packaging
 
