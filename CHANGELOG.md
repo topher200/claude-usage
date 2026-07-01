@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.2 — 2026-07-01
+
+### Packaging
+
+- Bumped the Homebrew formula pin from v1.1.0's commit to the **v1.5.1** tag tarball, so `brew install` / `brew upgrade` now installs current sources instead of year-old ones. The in-tree formula must reference the *previous* release to keep its `sha256` computable (a self-pointing hash is uncomputable), so Homebrew tracks one release behind by design (#46).
+
 ## v1.5.1 — 2026-07-01
 
 ### Packaging

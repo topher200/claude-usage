@@ -1,12 +1,14 @@
 class ClaudeUsage < Formula
   desc "Token, cost, and session dashboard for Claude Code usage"
   homepage "https://github.com/phuryn/claude-usage"
-  # URL and sha256 pinned to the current main commit (v1.1.0 release).
-  # The project intentionally doesn't tag releases, so this formula needs
-  # to be bumped each release. See CHANGELOG.md for what each commit ships.
-  url "https://github.com/phuryn/claude-usage/archive/256b3e839acbaa2b850345854d77fe8dfd15e44e.tar.gz"
-  version "1.1.0"
-  sha256 "1ee3c31268100d63ca137af253ccfaaba1781e4043d3f5d84e74bcf4ec9c5133"
+  # Pinned to the PREVIOUS release's tag tarball, never this formula's own
+  # release: the formula ships inside the repo it installs, so a self-pointing
+  # sha256 would be uncomputable (the tarball would contain this very hash).
+  # It therefore tracks one release behind by design — bump to the prior tag
+  # each release. See AGENTS.md "Homebrew formula and self-referential SHA".
+  url "https://github.com/phuryn/claude-usage/archive/refs/tags/v1.5.1.tar.gz"
+  version "1.5.1"
+  sha256 "88224cf583a04863942c5246e2e35d901bf60738dbe3352567ef6c749af9730d"
   license "MIT"
   head "https://github.com/phuryn/claude-usage.git", branch: "main"
 
