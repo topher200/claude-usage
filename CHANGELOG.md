@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.5.1 — TBD
+
+### Packaging
+
+- Fixed the Homebrew shim crashing at runtime with `python@3.13/bin/python3: No such file or directory`. Modern `python@3.x` kegs only ship the versioned `python3.13` in their `bin` (the unversioned `python3` symlink moved to `libexec/bin`), so the formula now execs `python3.13` directly (#46, thanks @adrianlungu and @Jeroendevr for reporting).
+- Fixed the Homebrew install instructions: Homebrew disabled installing a formula from an arbitrary raw URL, so the README now taps the repo first (`brew tap phuryn/claude-usage …` then `brew install phuryn/claude-usage/claude-usage`) (#46, thanks @adrianlungu).
+
 ## v1.5.0 — 2026-06-21
 
 ### Dashboard

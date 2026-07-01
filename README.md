@@ -43,9 +43,12 @@ No `pip install`, no virtual environment, no build step.
 
 ### macOS / Linux (Homebrew)
 ```
-brew install --formula https://raw.githubusercontent.com/phuryn/claude-usage/main/Formula/claude-usage.rb
+brew tap phuryn/claude-usage https://github.com/phuryn/claude-usage
+brew install phuryn/claude-usage/claude-usage
 claude-usage dashboard
 ```
+
+> Homebrew has disabled installing a formula from an arbitrary raw URL, so tap the repo first (thanks @adrianlungu for the working incantation in #46).
 
 After install, the `claude-usage` command is on your `PATH` and accepts the same subcommands as `python cli.py` (`scan`, `today`, `stats`, `dashboard`).
 
@@ -170,7 +173,7 @@ See [vscode-extension/README.md](vscode-extension/README.md) for settings, comma
 | `scanner.py` | Parses JSONL transcripts, writes to `~/.claude/usage.db` |
 | `dashboard.py` | HTTP server + single-page HTML/JS dashboard |
 | `cli.py` | `scan`, `today`, `stats`, `dashboard` commands |
-| `Formula/claude-usage.rb` | Homebrew formula — install with `brew install --formula <raw-url>` |
+| `Formula/claude-usage.rb` | Homebrew formula — install with `brew tap phuryn/claude-usage` then `brew install phuryn/claude-usage/claude-usage` |
 | `vscode-extension/` | VS Code extension — embeds the dashboard inside VS Code |
 | `Dockerfile` | Container image definition |
 | `scripts/run-docker.sh` | Build and run the dashboard in Docker with a read-only `~/.claude` mount |

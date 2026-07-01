@@ -15,9 +15,13 @@ class ClaudeUsage < Formula
   def install
     libexec.install "cli.py", "scanner.py", "dashboard.py"
 
+    # Reference the versioned interpreter (python3.13): modern python@3.x kegs
+    # only ship "python3.13" in their bin — the unversioned "python3" symlink
+    # lives in libexec/bin, so opt_bin/"python3" doesn't exist and the shim
+    # fails at runtime with "No such file or directory" (#46).
     (bin/"claude-usage").write <<~EOS
       #!/bin/bash
-      exec "#{Formula["python@3.13"].opt_bin}/python3" "#{libexec}/cli.py" "$@"
+      exec "#{Formula["python@3.13"].opt_bin}/python3.13" "#{libexec}/cli.py" "$@"
     EOS
     chmod 0755, bin/"claude-usage"
   end
