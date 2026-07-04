@@ -86,6 +86,14 @@ The entire UI lives in `HTML_TEMPLATE` as a raw string. Chart.js is loaded from 
 
 Client-side UI state (collapsed sections, the 24h update-check cache) is kept in **`localStorage`**, which is keyed by the page's origin. In the VS Code extension the dashboard is embedded as an **iframe at `http://127.0.0.1:<port>/`**, so that state only survives a window reload if the port is stable. The extension therefore remembers the last port in `workspaceState` and reuses it when it's still free (`resolveStablePort` in [vscode-extension/src/port-allocator.ts](vscode-extension/src/port-allocator.ts)) — don't revert that to a fresh `pickFreePort` every launch, or the panel silently loses its state each reload.
 
+### There's a long-running dashboard instance on :9898 — don't kill it by accident
+
+Topher's own dev machine runs a persistent dashboard via a systemd user unit (`~/.config/systemd/user/claude-usage.service`), `HOST=localhost PORT=9898`, independent of anything a coding agent starts for testing. `systemctl --user status claude-usage.service` shows whether it's up.
+
+Before running `pkill -f "cli.py dashboard"`, `pkill -f dashboard.py`, or similar broad-match kill commands: check `ss -tlnp | grep <port>` or `ps aux | grep dashboard` first and kill the specific PID you started, not a pattern match. A broad `pkill -f "cli.py dashboard"` matches the systemd-managed process too, and since it exits via `SIGTERM` (not a crash), `Restart=on-failure` does **not** bring it back — it just stays dead until someone notices and runs `systemctl --user start claude-usage.service`.
+
+When testing dashboard changes, prefer a throwaway port (`PORT=8080 python cli.py dashboard`) over the default, so there's no ambiguity about which process a kill command should target.
+
 ## Testing notes
 
 - `tests/test_scanner.py` and `tests/test_dashboard.py` use `tempfile.NamedTemporaryFile` for an isolated DB; never touch the user's real `~/.claude/usage.db`.
