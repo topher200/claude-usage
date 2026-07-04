@@ -326,6 +326,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .stat-card .value { font-size: 22px; font-weight: 700; }
   .stat-card .sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
 
+  .spend-limit-summary { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .spend-limit-summary .amount { font-size: 22px; font-weight: 700; }
+  .spend-limit-summary .pct { font-size: 13px; color: var(--muted); }
+  .spend-limit-bar-track { height: 8px; border-radius: 4px; background: var(--raised); overflow: hidden; margin-bottom: 8px; }
+  .spend-limit-bar-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width 0.2s; }
+  .spend-limit-bar-fill.over { background: var(--accent); }
+  .spend-limit-breakdown { font-size: 12px; color: var(--muted); }
+  .spend-limit-chart-wrap { position: relative; height: 180px; margin-top: 16px; }
+  .spend-limit-settings { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .spend-limit-settings-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+  .spend-limit-settings label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .spend-limit-settings input { width: 220px; padding: 5px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; }
+  .spend-limit-settings input:focus { outline: none; border-color: var(--accent); }
+  .spend-reports-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+  .spend-report-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text); padding: 4px 8px; border-radius: 5px; background: var(--raised); }
+  .spend-report-row .date { color: var(--muted); min-width: 90px; }
+  .spend-report-row .amount { flex: 1; }
+  .spend-report-del { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }
+  .spend-report-del:hover { color: var(--red); }
+  .spend-reports-empty { font-size: 12px; color: var(--muted); font-style: italic; }
+
   .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
   /* min-width:0 lets the grid column shrink below the canvas's intrinsic
      pixel width; without it, narrowing the window can't narrow the container,
@@ -508,6 +529,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <div class="container">
   <div class="stats-row" id="stats-row"></div>
+  <div class="table-card" id="sec-spend-limit" data-card="spend-limit">
+    <div class="section-header">
+      <div class="section-title"><span class="card-caret">&#9656;</span>Monthly Spend Limit</div>
+      <button class="export-btn" onclick="toggleSpendLimitSettings()" title="Set your monthly limit and any spend from other machines/products not tracked here">Edit</button>
+    </div>
+    <div id="spend-limit-body">
+      <div class="spend-limit-summary">
+        <span class="amount" id="spend-limit-amount"></span>
+        <span class="pct" id="spend-limit-pct"></span>
+      </div>
+      <div class="spend-limit-bar-track"><div class="spend-limit-bar-fill" id="spend-limit-bar"></div></div>
+      <div class="spend-limit-breakdown" id="spend-limit-breakdown"></div>
+      <div class="spend-limit-chart-wrap"><canvas id="chart-spend-daily"></canvas></div>
+      <div class="spend-limit-settings" id="spend-limit-settings" style="display:none;">
+        <div class="spend-limit-settings-row">
+          <label>Monthly limit ($)<input type="number" id="spend-limit-input" min="0" step="1"></label>
+          <button class="export-btn" onclick="saveSpendLimitAmount()">Save limit</button>
+        </div>
+        <div class="spend-limit-settings-row">
+          <label>What Claude.ai shows as "spent this month" ($)<input type="number" id="spend-report-input" min="0" step="0.01" placeholder="e.g. 276.50"></label>
+          <button class="export-btn" onclick="addSpendReport()">Add report for today</button>
+        </div>
+        <div class="spend-reports-list" id="spend-reports-list"></div>
+      </div>
+    </div>
+  </div>
   <div class="charts-grid">
     <div class="chart-card wide" id="sec-daily" data-card="daily">
       <h2><span class="card-caret">&#9656;</span><span id="daily-chart-title">Daily Token Usage</span></h2>
@@ -868,7 +915,7 @@ Chart.defaults.plugins.tooltip.callbacks.labelColor = (ctx) => {
 // series the user toggled off. We track hidden series by label per chart and
 // reapply on rebuild: dataset charts via `dataset.hidden`, the doughnut via
 // per-slice data visibility (see applyModelHidden).
-const hiddenSeries = { daily: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set() };
+const hiddenSeries = { daily: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
 function legendToggle(key) {
   return (e, item, legend) => {
     const ci = legend.chart;
@@ -1286,6 +1333,7 @@ function applyFilter() {
   document.getElementById('subagent-chart-title').textContent = 'Subagent Tokens by Type \u2014 ' + RANGE_LABELS[selectedRange];
 
   renderStats(totals);
+  renderSpendLimit();
   renderDailyChart(daily);
   renderHourlyChart(hourlyAgg);
   renderModelChart(byModel);
@@ -1323,6 +1371,197 @@ function renderStats(t) {
       ${s.sub ? `<div class="sub">${esc(s.sub)}</div>` : ''}
     </div>
   `).join('');
+}
+
+// ── Monthly spend limit ──────────────────────────────────────────────────────
+// Tracks progress toward a user-configured monthly $ cap (e.g. an Anthropic
+// Enterprise org spend limit). Independent of the range/model filters above —
+// it always reflects the current calendar month across every model, because
+// that's what a real billing limit resets against.
+//
+// This dashboard only sees Claude Code usage on this machine, so the gap
+// between that and the real org-wide total is tracked as dated "reports":
+// the user periodically types in the cumulative "spent this month" figure
+// Claude.ai shows them, stamped with the date it was reported. Each report
+// implies a one-day "non-tracked usage" bump on its date — whatever gap
+// remains between the reported total and (this machine's cumulative cost +
+// bumps already accounted for) so far this month. Bumps never move once
+// assigned, so local usage recorded after a report's date adds on top of it
+// rather than double-counting.
+const SPEND_CFG_KEY = 'cu_spend_limit_cfg';
+const DEFAULT_SPEND_CFG = { limit: 1500, reports: {} };
+
+function loadSpendCfg() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SPEND_CFG_KEY) || 'null');
+    if (saved && typeof saved.limit === 'number') {
+      return { limit: saved.limit, reports: (saved.reports && typeof saved.reports === 'object') ? saved.reports : {} };
+    }
+  } catch (e) {}
+  return { limit: DEFAULT_SPEND_CFG.limit, reports: {} };
+}
+
+function saveSpendCfg(cfg) {
+  try { localStorage.setItem(SPEND_CFG_KEY, JSON.stringify(cfg)); } catch (e) {}
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function currentMonthCost() {
+  if (!rawData) return 0;
+  const { start, end } = getRangeBounds('month');
+  return (rawData.daily_by_model || [])
+    .filter(r => r.day >= start && r.day <= end)
+    .reduce((s, r) => s + calcCost(r.model, r.input, r.output, r.cache_read, r.cache_creation), 0);
+}
+
+// date (YYYY-MM-DD) -> this machine's local Claude Code cost that day, all models.
+function dailyLocalCostMap() {
+  const map = {};
+  for (const r of (rawData?.daily_by_model || [])) {
+    map[r.day] = (map[r.day] || 0) + calcCost(r.model, r.input, r.output, r.cache_read, r.cache_creation);
+  }
+  return map;
+}
+
+// Walks the month's reports in date order, turning each cumulative "spent this
+// month" figure into a same-day bump: reported total minus local cost through
+// that date minus bumps already assigned on earlier dates this month.
+function computeMonthlyBumps(cfg, monthStart, monthEnd) {
+  const localByDay = dailyLocalCostMap();
+  const localCumThrough = (targetDate) =>
+    Object.entries(localByDay)
+      .filter(([d]) => d >= monthStart && d <= targetDate)
+      .reduce((s, [, v]) => s + v, 0);
+
+  const dates = Object.keys(cfg.reports).filter(d => d >= monthStart && d <= monthEnd).sort();
+  const byDate = {};
+  let cumBump = 0;
+  for (const date of dates) {
+    const bump = Math.max(0, cfg.reports[date] - localCumThrough(date) - cumBump);
+    byDate[date] = bump;
+    cumBump += bump;
+  }
+  return { byDate, total: cumBump };
+}
+
+function toggleSpendLimitSettings() {
+  const el = document.getElementById('spend-limit-settings');
+  const opening = el.style.display === 'none';
+  el.style.display = opening ? 'flex' : 'none';
+  if (opening) {
+    document.getElementById('spend-limit-input').value = loadSpendCfg().limit;
+    document.getElementById('spend-report-input').value = '';
+  }
+}
+
+function saveSpendLimitAmount() {
+  const limit = parseFloat(document.getElementById('spend-limit-input').value);
+  const cfg = loadSpendCfg();
+  cfg.limit = Number.isFinite(limit) && limit >= 0 ? limit : DEFAULT_SPEND_CFG.limit;
+  saveSpendCfg(cfg);
+  renderSpendLimit();
+}
+
+function addSpendReport() {
+  const input = document.getElementById('spend-report-input');
+  const amount = parseFloat(input.value);
+  if (!Number.isFinite(amount) || amount < 0) return;
+  const cfg = loadSpendCfg();
+  cfg.reports[todayISO()] = amount;
+  saveSpendCfg(cfg);
+  input.value = '';
+  renderSpendLimit();
+}
+
+function deleteSpendReport(date) {
+  const cfg = loadSpendCfg();
+  delete cfg.reports[date];
+  saveSpendCfg(cfg);
+  renderSpendLimit();
+}
+
+function renderSpendReportsList(cfg, monthStart, monthEnd) {
+  const el = document.getElementById('spend-reports-list');
+  if (!el) return;
+  const dates = Object.keys(cfg.reports).filter(d => d >= monthStart && d <= monthEnd).sort().reverse();
+  if (!dates.length) {
+    el.innerHTML = '<div class="spend-reports-empty">No reports yet this month.</div>';
+    return;
+  }
+  el.innerHTML = dates.map(d => `
+    <div class="spend-report-row">
+      <span class="date">${esc(d)}</span>
+      <span class="amount">${esc(fmtCostBig(cfg.reports[d]))}</span>
+      <button class="spend-report-del" onclick="deleteSpendReport('${esc(d)}')" title="Delete this report">&times;</button>
+    </div>
+  `).join('');
+}
+
+function renderSpendDailyChart(monthStart, monthEnd, bumpsByDate) {
+  const canvas = document.getElementById('chart-spend-daily');
+  if (!canvas) return;
+  const localByDay = dailyLocalCostMap();
+  const days = [];
+  for (let d = monthStart; d <= monthEnd; ) {
+    days.push(d);
+    const next = new Date(d + 'T00:00:00Z');
+    next.setUTCDate(next.getUTCDate() + 1);
+    d = next.toISOString().slice(0, 10);
+  }
+  const localData = days.map(d => localByDay[d] || 0);
+  const bumpData  = days.map(d => bumpsByDate[d] || 0);
+
+  const ctx = canvas.getContext('2d');
+  if (charts.spendDaily) charts.spendDaily.destroy();
+  charts.spendDaily = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: days,
+      datasets: [
+        { label: 'Claude Code (this machine)', hidden: hiddenSeries.spendDaily.has('Claude Code (this machine)'), data: localData, backgroundColor: TOKEN_COLORS.input,          hoverBackgroundColor: TOKEN_HOVER.input,          stack: 'spend' },
+        { label: 'Non-tracked usage',          hidden: hiddenSeries.spendDaily.has('Non-tracked usage'),          data: bumpData,  backgroundColor: TOKEN_COLORS.cache_creation, hoverBackgroundColor: TOKEN_HOVER.cache_creation, stack: 'spend' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+      plugins: {
+        legend: { onClick: legendToggle('spendDaily'), labels: { color: C.axis, boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + fmtCostBig(ctx.parsed.y) } },
+      },
+      scales: {
+        x: { ticks: { color: C.axis, maxRotation: 0, autoSkip: true, font: { size: 10 } }, grid: { color: C.border } },
+        y: { beginAtZero: true, ticks: { color: C.axis, callback: v => '$' + v }, grid: { color: C.border } },
+      }
+    }
+  });
+}
+
+function renderSpendLimit() {
+  const cfg = loadSpendCfg();
+  const { start, end } = getRangeBounds('month');
+  const localCost = currentMonthCost();
+  const bumps = computeMonthlyBumps(cfg, start, end);
+  const total = localCost + bumps.total;
+  const pct = cfg.limit > 0 ? (total / cfg.limit) * 100 : 0;
+
+  document.getElementById('spend-limit-amount').textContent =
+    fmtCostBig(total) + ' of ' + fmtCostBig(cfg.limit);
+  document.getElementById('spend-limit-pct').textContent = pct.toFixed(1) + '% used';
+
+  const bar = document.getElementById('spend-limit-bar');
+  bar.style.width = Math.min(pct, 100) + '%';
+  bar.classList.toggle('over', pct >= 100);
+
+  document.getElementById('spend-limit-breakdown').textContent =
+    'This machine (Claude Code): ' + fmtCostBig(localCost) +
+    '  ·  Non-tracked usage (reported): ' + fmtCostBig(bumps.total) +
+    '  ·  Calendar month to date';
+
+  renderSpendDailyChart(start, end, bumps.byDate);
+  renderSpendReportsList(cfg, start, end);
 }
 
 // Bucket rows into 24 hours (display-TZ), summing turns + output, and count
