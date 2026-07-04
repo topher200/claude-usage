@@ -333,7 +333,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .spend-limit-bar-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width 0.2s; }
   .spend-limit-bar-fill.over { background: var(--accent); }
   .spend-limit-breakdown { font-size: 12px; color: var(--muted); }
-  .spend-limit-chart-wrap { position: relative; height: 180px; margin-top: 16px; }
+  .spend-limit-projection { display: block; font-size: 13px; margin-top: 6px; }
+  .spend-limit-caption { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .spend-limit-chart-wrap { position: relative; height: 220px; margin-top: 4px; }
+  /* Two independent legend groups instead of Chart.js's single centered row, so
+     each group sits directly above the axis (left/right) it describes. */
+  .spend-legend-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .spend-legend-group { display: flex; gap: 14px; flex-wrap: wrap; }
+  .spend-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); cursor: pointer; user-select: none; }
+  .spend-legend-item.hidden { opacity: 0.4; text-decoration: line-through; }
+  .spend-legend-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
   .spend-limit-settings { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
   .spend-limit-settings-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
   .spend-limit-settings label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -541,7 +550,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       <div class="spend-limit-bar-track"><div class="spend-limit-bar-fill" id="spend-limit-bar"></div></div>
       <div class="spend-limit-breakdown" id="spend-limit-breakdown"></div>
+      <span class="spend-limit-projection" id="spend-limit-projection"></span>
+      <div class="spend-legend-row">
+        <div class="spend-legend-group" id="spend-legend-left"></div>
+        <div class="spend-legend-group" id="spend-legend-right"></div>
+      </div>
       <div class="spend-limit-chart-wrap"><canvas id="chart-spend-daily"></canvas></div>
+      <div class="spend-limit-caption">Projected from your last 7 days of local usage; non-tracked spend estimated from your latest report.</div>
       <div class="spend-limit-settings" id="spend-limit-settings" style="display:none;">
         <div class="spend-limit-settings-row">
           <label>Monthly limit ($)<input type="number" id="spend-limit-input" min="0" step="1"></label>
@@ -1409,14 +1424,6 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function currentMonthCost() {
-  if (!rawData) return 0;
-  const { start, end } = getRangeBounds('month');
-  return (rawData.daily_by_model || [])
-    .filter(r => r.day >= start && r.day <= end)
-    .reduce((s, r) => s + calcCost(r.model, r.input, r.output, r.cache_read, r.cache_creation), 0);
-}
-
 // date (YYYY-MM-DD) -> this machine's local Claude Code cost that day, all models.
 function dailyLocalCostMap() {
   const map = {};
@@ -1424,6 +1431,18 @@ function dailyLocalCostMap() {
     map[r.day] = (map[r.day] || 0) + calcCost(r.model, r.input, r.output, r.cache_read, r.cache_creation);
   }
   return map;
+}
+
+// Every ISO date from monthStart to monthEnd inclusive.
+function monthDayList(monthStart, monthEnd) {
+  const days = [];
+  for (let d = monthStart; d <= monthEnd; ) {
+    days.push(d);
+    const next = new Date(d + 'T00:00:00Z');
+    next.setUTCDate(next.getUTCDate() + 1);
+    d = next.toISOString().slice(0, 10);
+  }
+  return days;
 }
 
 // Walks the month's reports in date order, turning each cumulative "spent this
@@ -1445,6 +1464,79 @@ function computeMonthlyBumps(cfg, monthStart, monthEnd) {
     cumBump += bump;
   }
   return { byDate, total: cumBump };
+}
+
+// Mean local daily cost over the trailing `windowDays` calendar days ending on
+// `asOfISO` (inclusive). Idle days count as $0, so a burst doesn't get diluted
+// by only averaging over active days.
+function trailingDailyBurn(localByDay, asOfISO, windowDays) {
+  let sum = 0;
+  let d = asOfISO;
+  for (let i = 0; i < windowDays; i++) {
+    sum += localByDay[d] || 0;
+    const prev = new Date(d + 'T00:00:00Z');
+    prev.setUTCDate(prev.getUTCDate() - 1);
+    d = prev.toISOString().slice(0, 10);
+  }
+  return sum / windowDays;
+}
+
+function fmtMonthDay(iso) {
+  return new Date(iso + 'T00:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+// Projects cumulative spend to month-end from the trailing 7-day local burn
+// rate, scaled by how much higher the reconciled (local + non-tracked) total
+// is than local cost alone — so the forecast tracks the real org-wide rate,
+// not just what this machine can see. The actual/historical line only ever
+// reflects ground truth (local cost + bumps already assigned); it is not
+// smoothed or backfilled, so it can dip low right after a report until local
+// usage catches back up — the forecast's calibration multiplier is what keeps
+// the projection itself honest in the meantime.
+function computeSpendProjection(cfg, monthStart, monthEnd) {
+  const days = monthDayList(monthStart, monthEnd);
+  const localByDay = dailyLocalCostMap();
+  const bumps = computeMonthlyBumps(cfg, monthStart, monthEnd);
+  const today = todayISO();
+  const elapsed = days.filter(d => d <= today).length;
+
+  let run = 0;
+  const cumReconciled = days.map(d => {
+    run += (localByDay[d] || 0) + (bumps.byDate[d] || 0);
+    return d <= today ? run : null;
+  });
+  const reconciledToday = cumReconciled[Math.max(0, elapsed - 1)] || 0;
+  const localCumToDate = days.filter(d => d <= today).reduce((s, d) => s + (localByDay[d] || 0), 0);
+
+  const window = Math.min(7, Math.max(1, elapsed));
+  const burnRate = trailingDailyBurn(localByDay, today, window);
+  const multiplier = localCumToDate > 0 ? reconciledToday / localCumToDate : 1;
+  const dailyBurn = burnRate * multiplier;
+
+  let p = reconciledToday;
+  const cumProjected = days.map(d => {
+    if (d < today) return null;
+    if (d === today) return reconciledToday;
+    p += dailyBurn;
+    return p;
+  });
+  const projectedEnd = p;
+  const limitData = days.map(() => cfg.limit);
+
+  const showProjection = elapsed >= 3 && localCumToDate > 0;
+  const overBudget = reconciledToday >= cfg.limit;
+  const crossDate = (!overBudget && dailyBurn > 0)
+    ? (days.find((d, i) => d >= today && cumProjected[i] >= cfg.limit) || null)
+    : null;
+
+  return {
+    days,
+    localData: days.map(d => localByDay[d] || 0),
+    bumpData: days.map(d => bumps.byDate[d] || 0),
+    cumReconciled, cumProjected, limitData,
+    reconciledToday, projectedEnd, crossDate,
+    showProjection, overBudget,
+  };
 }
 
 function toggleSpendLimitSettings() {
@@ -1500,51 +1592,95 @@ function renderSpendReportsList(cfg, monthStart, monthEnd) {
   `).join('');
 }
 
-function renderSpendDailyChart(monthStart, monthEnd, bumpsByDate) {
+function renderSpendDailyChart(proj, cfg) {
   const canvas = document.getElementById('chart-spend-daily');
   if (!canvas) return;
-  const localByDay = dailyLocalCostMap();
-  const days = [];
-  for (let d = monthStart; d <= monthEnd; ) {
-    days.push(d);
-    const next = new Date(d + 'T00:00:00Z');
-    next.setUTCDate(next.getUTCDate() + 1);
-    d = next.toISOString().slice(0, 10);
+
+  const projectedOver = proj.overBudget || proj.projectedEnd >= cfg.limit;
+  // `order` controls z-index (lower draws first/behind) and tooltip sequence.
+  // Give the left-axis (y) bars the lowest values so they sit behind the
+  // right-axis (y1) lines, which get increasing values so they draw on top.
+  const datasets = [
+    { type: 'bar', label: 'Claude Code (this machine)', hidden: hiddenSeries.spendDaily.has('Claude Code (this machine)'), data: proj.localData, backgroundColor: TOKEN_COLORS.input,          hoverBackgroundColor: TOKEN_HOVER.input,          stack: 'spend', yAxisID: 'y', order: 0 },
+    { type: 'bar', label: 'Non-tracked usage',          hidden: hiddenSeries.spendDaily.has('Non-tracked usage'),          data: proj.bumpData,  backgroundColor: TOKEN_COLORS.cache_creation, hoverBackgroundColor: TOKEN_HOVER.cache_creation, stack: 'spend', yAxisID: 'y', order: 0 },
+    { type: 'line', label: 'Monthly limit', hidden: hiddenSeries.spendDaily.has('Monthly limit'), data: proj.limitData, yAxisID: 'y1', order: 1,
+      borderColor: C.amber, borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true },
+    { type: 'line', label: 'Cumulative spend', hidden: hiddenSeries.spendDaily.has('Cumulative spend'), data: proj.cumReconciled, yAxisID: 'y1', order: 2,
+      borderColor: C.green, backgroundColor: 'rgba(116,201,145,0.10)', borderWidth: 2, pointRadius: 0, tension: 0, spanGaps: false },
+  ];
+  if (proj.showProjection) {
+    datasets.push({ type: 'line', label: 'Projected', hidden: hiddenSeries.spendDaily.has('Projected'), data: proj.cumProjected, yAxisID: 'y1', order: 3,
+      borderColor: projectedOver ? C.red : C.accent, borderDash: [6, 4], borderWidth: 2, pointRadius: 0, tension: 0, spanGaps: false });
   }
-  const localData = days.map(d => localByDay[d] || 0);
-  const bumpData  = days.map(d => bumpsByDate[d] || 0);
+
+  const y1Max = Math.max(cfg.limit, proj.projectedEnd || proj.reconciledToday || 0) * 1.1;
 
   const ctx = canvas.getContext('2d');
   if (charts.spendDaily) charts.spendDaily.destroy();
   charts.spendDaily = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: days,
-      datasets: [
-        { label: 'Claude Code (this machine)', hidden: hiddenSeries.spendDaily.has('Claude Code (this machine)'), data: localData, backgroundColor: TOKEN_COLORS.input,          hoverBackgroundColor: TOKEN_HOVER.input,          stack: 'spend' },
-        { label: 'Non-tracked usage',          hidden: hiddenSeries.spendDaily.has('Non-tracked usage'),          data: bumpData,  backgroundColor: TOKEN_COLORS.cache_creation, hoverBackgroundColor: TOKEN_HOVER.cache_creation, stack: 'spend' },
-      ]
-    },
+    data: { labels: proj.days, datasets },
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+      interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { onClick: legendToggle('spendDaily'), labels: { color: C.axis, boxWidth: 12, font: { size: 11 } } },
+        legend: { display: false },
         tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + fmtCostBig(ctx.parsed.y) } },
       },
       scales: {
-        x: { ticks: { color: C.axis, maxRotation: 0, autoSkip: true, font: { size: 10 } }, grid: { color: C.border } },
-        y: { beginAtZero: true, ticks: { color: C.axis, callback: v => '$' + v }, grid: { color: C.border } },
+        x:  { ticks: { color: C.axis, maxRotation: 0, autoSkip: true, font: { size: 10 } }, grid: { color: C.border } },
+        y:  { position: 'left',  beginAtZero: true, stacked: true, ticks: { color: C.axis, callback: v => '$' + v }, grid: { color: C.border },      title: { display: true, text: 'Daily $',      color: C.axis, font: { size: 11 } } },
+        y1: { position: 'right', beginAtZero: true, suggestedMax: y1Max,   ticks: { color: C.axis, callback: v => '$' + v }, grid: { drawOnChartArea: false }, title: { display: true, text: 'Cumulative $', color: C.axis, font: { size: 11 } } },
       }
     }
   });
+
+  renderSpendLegend(datasets);
+}
+
+// Chart.js's built-in legend renders one row/column with no way to split
+// items toward the axis each belongs to, so this draws two independent
+// legend groups instead: left-axis (bar) series above the left axis, the
+// right-axis (line) series above the right axis. Clicking an item toggles
+// that dataset's visibility, mirroring legendToggle()'s behavior.
+function renderSpendLegend(datasets) {
+  const leftEl = document.getElementById('spend-legend-left');
+  const rightEl = document.getElementById('spend-legend-right');
+  if (!leftEl || !rightEl) return;
+
+  const itemHTML = (ds, index) => {
+    const color = ds.borderColor || ds.backgroundColor;
+    const hidden = hiddenSeries.spendDaily.has(ds.label);
+    return `<span class="spend-legend-item${hidden ? ' hidden' : ''}" data-index="${index}">
+      <span class="spend-legend-swatch" style="background:${color}"></span>${esc(ds.label)}
+    </span>`;
+  };
+
+  const left = [], right = [];
+  datasets.forEach((ds, i) => (ds.yAxisID === 'y' ? left : right).push(itemHTML(ds, i)));
+  leftEl.innerHTML = left.join('');
+  rightEl.innerHTML = right.join('');
+
+  const onClick = (e) => {
+    const item = e.target.closest('.spend-legend-item');
+    if (!item || !charts.spendDaily) return;
+    const ds = charts.spendDaily.data.datasets[Number(item.dataset.index)];
+    const nowHidden = !ds.hidden;
+    ds.hidden = nowHidden;
+    if (nowHidden) hiddenSeries.spendDaily.add(ds.label); else hiddenSeries.spendDaily.delete(ds.label);
+    charts.spendDaily.update();
+    item.classList.toggle('hidden', nowHidden);
+  };
+  leftEl.onclick = onClick;
+  rightEl.onclick = onClick;
 }
 
 function renderSpendLimit() {
   const cfg = loadSpendCfg();
   const { start, end } = getRangeBounds('month');
-  const localCost = currentMonthCost();
-  const bumps = computeMonthlyBumps(cfg, start, end);
-  const total = localCost + bumps.total;
+  const proj = computeSpendProjection(cfg, start, end);
+  const localCost = proj.localData.reduce((s, v) => s + v, 0);
+  const bumpTotal = proj.bumpData.reduce((s, v) => s + v, 0);
+  const total = proj.reconciledToday;
   const pct = cfg.limit > 0 ? (total / cfg.limit) * 100 : 0;
 
   document.getElementById('spend-limit-amount').textContent =
@@ -1557,10 +1693,29 @@ function renderSpendLimit() {
 
   document.getElementById('spend-limit-breakdown').textContent =
     'This machine (Claude Code): ' + fmtCostBig(localCost) +
-    '  ·  Non-tracked usage (reported): ' + fmtCostBig(bumps.total) +
+    '  ·  Non-tracked usage (reported): ' + fmtCostBig(bumpTotal) +
     '  ·  Calendar month to date';
 
-  renderSpendDailyChart(start, end, bumps.byDate);
+  const projEl = document.getElementById('spend-limit-projection');
+  const monthEndLabel = fmtMonthDay(end);
+  if (proj.overBudget) {
+    projEl.textContent = 'Limit exceeded — ' + fmtCostBig(total - cfg.limit) + ' over';
+    projEl.style.color = C.red;
+  } else if (!proj.showProjection) {
+    projEl.textContent = 'Projection available after a few days of data';
+    projEl.style.color = 'var(--muted)';
+  } else if (proj.projectedEnd >= cfg.limit) {
+    const overBy = proj.projectedEnd - cfg.limit;
+    projEl.textContent = 'Projected ' + fmtCostBig(proj.projectedEnd) + ' by ' + monthEndLabel +
+      ' (' + fmtCostBig(overBy) + ' over the ' + fmtCostBig(cfg.limit) + ' limit)' +
+      (proj.crossDate ? ' · on pace to cross the limit around ' + fmtMonthDay(proj.crossDate) : '');
+    projEl.style.color = C.accent;
+  } else {
+    projEl.textContent = 'Projected ' + fmtCostBig(proj.projectedEnd) + ' by ' + monthEndLabel;
+    projEl.style.color = C.green;
+  }
+
+  renderSpendDailyChart(proj, cfg);
   renderSpendReportsList(cfg, start, end);
 }
 
