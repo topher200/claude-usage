@@ -59,19 +59,21 @@ def get_dashboard_data(db_path=DB_PATH):
         SELECT
             substr(timestamp, 1, 10)   as day,
             COALESCE(NULLIF(model, ''), 'unknown') as model,
+            COALESCE(is_subagent, 0)   as is_subagent,
             SUM(input_tokens)          as input,
             SUM(output_tokens)         as output,
             SUM(cache_read_tokens)     as cache_read,
             SUM(cache_creation_tokens) as cache_creation,
             COUNT(*)                   as turns
         FROM turns
-        GROUP BY day, COALESCE(NULLIF(model, ''), 'unknown')
+        GROUP BY day, COALESCE(NULLIF(model, ''), 'unknown'), COALESCE(is_subagent, 0)
         ORDER BY day, model
     """).fetchall()
 
     daily_by_model = [{
         "day":            r["day"],
         "model":          r["model"],
+        "is_subagent":    r["is_subagent"] or 0,
         "input":          r["input"] or 0,
         "output":         r["output"] or 0,
         "cache_read":     r["cache_read"] or 0,
@@ -516,6 +518,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </button>
     <div class="jump-panel">
       <button class="jump-link" data-target="sec-daily">Daily</button>
+      <button class="jump-link" data-target="sec-daily-cost">Daily Spend</button>
       <button class="jump-link" data-target="sec-hourly">Distribution</button>
       <button class="jump-link" data-target="sec-models">By Model</button>
       <button class="jump-link" data-target="sec-projects">Top Projects</button>
@@ -575,6 +578,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="chart-card wide" id="sec-daily" data-card="daily">
       <h2><span class="card-caret">&#9656;</span><span id="daily-chart-title">Daily Token Usage</span></h2>
       <div class="chart-wrap tall"><canvas id="chart-daily"></canvas></div>
+    </div>
+    <div class="chart-card wide" id="sec-daily-cost" data-card="daily-cost">
+      <h2><span class="card-caret">&#9656;</span><span id="daily-cost-chart-title">Daily Spend by Model</span></h2>
+      <div class="chart-wrap tall"><canvas id="chart-daily-cost"></canvas></div>
     </div>
     <div class="chart-card wide" id="sec-hourly" data-card="hourly">
       <div class="chart-header">
@@ -902,6 +909,31 @@ const AGENT_TYPE_COLORS = {
   'unknown':           '#4F4F50',
 };
 function colorForAgentType(t) { return AGENT_TYPE_COLORS[t] || '#7FA98C'; }
+
+// Per-model-family swatches for the daily spend chart — subagent series reuse
+// the same family color, lightened, so "Opus" and "Opus Subagent" read as a
+// matched pair rather than two unrelated colors.
+const SPEND_FAMILY_COLORS = {
+  fable: '#B98AA0', mythos: '#B98AA0',
+  opus: '#D97757', sonnet: '#6E97A8', haiku: '#7FA98C',
+};
+function spendBaseColor(model) {
+  const ml = (model || '').toLowerCase();
+  for (const k of Object.keys(SPEND_FAMILY_COLORS)) {
+    if (ml.includes(k)) return SPEND_FAMILY_COLORS[k];
+  }
+  return '#A88B6A';
+}
+function lightenHex(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff;
+  const mix = (c) => Math.round(c + (255 - c) * amt);
+  return '#' + [mix(r), mix(g), mix(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+function colorForSpendSeries(model, isSubagent) {
+  const base = spendBaseColor(model);
+  return isSubagent ? lightenHex(base, 0.45) : base;
+}
 function fmtDuration(ms) {
   if (!ms || ms < 0) return '—';
   const s = Math.round(ms / 1000);
@@ -931,7 +963,7 @@ Chart.defaults.plugins.tooltip.callbacks.labelColor = (ctx) => {
 // series the user toggled off. We track hidden series by label per chart and
 // reapply on rebuild: dataset charts via `dataset.hidden`, the doughnut via
 // per-slice data visibility (see applyModelHidden).
-const hiddenSeries = { daily: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
+const hiddenSeries = { daily: new Set(), dailyCost: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
 function legendToggle(key) {
   return (e, item, legend) => {
     const ci = legend.chart;
@@ -1336,6 +1368,46 @@ function applyFilter() {
     (b.input + b.output + b.cache_read + b.cache_creation) -
     (a.input + a.output + a.cache_read + a.cache_creation));
 
+  // Daily spend by model, split into non-subagent / subagent series (e.g.
+  // "Opus" vs "Opus Subagent") so the chart shows where cost is dispatched
+  // vs delegated. Non-billable models cost $0 but still get their own series
+  // (rather than being dropped) so no local activity is silently missing from
+  // the chart's legend.
+  const spendSeriesMap = {};
+  const spendDaySet = new Set();
+  for (const r of filteredDaily) {
+    const key = r.model + '\x00' + (r.is_subagent ? 1 : 0);
+    if (!spendSeriesMap[key]) {
+      spendSeriesMap[key] = {
+        model: r.model,
+        isSubagent: !!r.is_subagent,
+        label: shortModelName(r.model) + (r.is_subagent ? ' Subagent' : ''),
+        byDay: {},
+      };
+    }
+    const cost = calcCost(r.model, r.input, r.output, r.cache_read, r.cache_creation);
+    spendSeriesMap[key].byDay[r.day] = (spendSeriesMap[key].byDay[r.day] || 0) + cost;
+    spendDaySet.add(r.day);
+  }
+  const spendSeries = Object.values(spendSeriesMap).sort((a, b) => {
+    const pa = modelPriority(a.model), pb = modelPriority(b.model);
+    if (pa !== pb) return pa - pb;
+    if (a.model !== b.model) return a.model.localeCompare(b.model);
+    return (a.isSubagent ? 1 : 0) - (b.isSubagent ? 1 : 0);
+  });
+
+  // Manually-reported non-tracked spend (see Monthly Spend Limit) is real
+  // cost that never appears in `turns`, so fold its daily bump in as its own
+  // series — otherwise this chart would silently undercount actual spend on
+  // days with a report.
+  const nonTrackedByDay = computeBumpsForRange(loadSpendCfg(), start, end);
+  const hasNonTracked = Object.values(nonTrackedByDay).some(v => v);
+  if (hasNonTracked) {
+    Object.keys(nonTrackedByDay).forEach(d => spendDaySet.add(d));
+    spendSeries.push({ model: null, isSubagent: false, nonTracked: true, label: 'Non-tracked (reported)', byDay: nonTrackedByDay });
+  }
+  const spendDays = [...spendDaySet].sort();
+
   // Top dispatches: filter by range + selected model. Keep the full filtered set
   // (already ranked by tokens server-side) so the table can page it like Recent
   // Sessions — show more/less plus CSV export of everything.
@@ -1345,12 +1417,14 @@ function applyFilter() {
 
   // Update daily chart title
   document.getElementById('daily-chart-title').textContent = 'Daily Token Usage \u2014 ' + RANGE_LABELS[selectedRange];
+  document.getElementById('daily-cost-chart-title').textContent = 'Daily Spend by Model \u2014 ' + RANGE_LABELS[selectedRange];
   document.getElementById('hourly-chart-title').textContent = 'Average Hourly Distribution \u2014 ' + RANGE_LABELS[selectedRange];
   document.getElementById('subagent-chart-title').textContent = 'Subagent Tokens by Type \u2014 ' + RANGE_LABELS[selectedRange];
 
   renderStats(totals);
   renderSpendLimit();
   renderDailyChart(daily);
+  renderDailyCostChart(spendDays, spendSeries);
   renderHourlyChart(hourlyAgg);
   renderModelChart(byModel);
   renderProjectChart(byProject);
@@ -1465,6 +1539,28 @@ function computeMonthlyBumps(cfg, monthStart, monthEnd) {
     cumBump += bump;
   }
   return { byDate, total: cumBump };
+}
+
+// Same per-day bump as computeMonthlyBumps, generalized to any [start, end]
+// range rather than a single calendar month. Reports reset cumulative "spent
+// this month" tracking at each month boundary, so this walks every calendar
+// month a report falls in, then keeps only the days inside the requested range.
+function computeBumpsForRange(cfg, start, end) {
+  const reportDates = Object.keys(cfg.reports);
+  if (!reportDates.length) return {};
+  const monthKeys = new Set(reportDates.map(d => d.slice(0, 7)));
+  const byDate = {};
+  for (const mk of monthKeys) {
+    const [y, m] = mk.split('-').map(Number);
+    const monthStart = mk + '-01';
+    const monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    Object.assign(byDate, computeMonthlyBumps(cfg, monthStart, monthEnd).byDate);
+  }
+  const filtered = {};
+  for (const [d, v] of Object.entries(byDate)) {
+    if (v && (!start || d >= start) && (!end || d <= end)) filtered[d] = v;
+  }
+  return filtered;
 }
 
 // Mean local daily cost over the trailing `windowDays` calendar days ending on
@@ -1850,6 +1946,43 @@ function renderDailyChart(daily) {
         x: { ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
         y:  { position: 'left',  ticks: { color: C.green, callback: v => fmt(v) }, grid: { color: C.border }, title: { display: true, text: 'Cache', color: C.green } },
         y1: { position: 'right', ticks: { color: C.blue, callback: v => fmt(v) }, grid: { drawOnChartArea: false },    title: { display: true, text: 'Input / Output', color: C.blue } },
+      }
+    }
+  });
+}
+
+function renderDailyCostChart(days, series) {
+  const ctx = document.getElementById('chart-daily-cost').getContext('2d');
+  if (charts.dailyCost) charts.dailyCost.destroy();
+  if (!series.length) { charts.dailyCost = null; return; }
+  charts.dailyCost = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: days,
+      datasets: series.map(s => {
+        const color = s.nonTracked ? TOKEN_COLORS.cache_creation : colorForSpendSeries(s.model, s.isSubagent);
+        return {
+          label: s.label,
+          hidden: hiddenSeries.dailyCost.has(s.label),
+          data: days.map(d => s.byDay[d] || 0),
+          backgroundColor: color,
+          hoverBackgroundColor: color,
+          stack: 'cost',
+        };
+      })
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+      plugins: {
+        legend: { onClick: legendToggle('dailyCost'), labels: { color: C.axis, boxWidth: 12 } },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
+          footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
+        } }
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
+        y: { stacked: true, ticks: { color: C.axis, callback: v => fmtCost(v) }, grid: { color: C.border } },
       }
     }
   });
