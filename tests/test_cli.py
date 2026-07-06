@@ -134,6 +134,33 @@ class TestCalcCost(unittest.TestCase):
         cost = calc_cost("claude-opus-4-6", 0, 0, 0, 1_000_000)
         self.assertAlmostEqual(cost, 6.25)
 
+    def test_cache_creation_1h_premium(self):
+        # 1h cache write = 200% of input price.
+        # 1M cache_creation of Opus, all 1h, at $5 * 2 = $10.00
+        cost = calc_cost("claude-opus-4-6", 0, 0, 0, 1_000_000, 1_000_000)
+        self.assertAlmostEqual(cost, 10.00)
+
+    def test_cache_creation_mixed_5m_1h(self):
+        # 1M total cache write, 600k of it 1h: 400k @ 1.25x + 600k @ 2x (Opus $5)
+        cost = calc_cost("claude-opus-4-6", 0, 0, 0, 1_000_000, 600_000)
+        expected = (400_000 * 6.25 + 600_000 * 10.00) / 1_000_000
+        self.assertAlmostEqual(cost, expected)
+
+    def test_cache_1h_defaults_to_5m_when_omitted(self):
+        # Omitting the 1h arg bills the whole cache-write total at the 5m rate.
+        self.assertAlmostEqual(
+            calc_cost("claude-opus-4-6", 0, 0, 0, 1_000_000),
+            calc_cost("claude-opus-4-6", 0, 0, 0, 1_000_000, 0),
+        )
+
+    def test_cache_write_1h_is_double_input(self):
+        # Every priced model's 1h cache-write rate is 2x its input rate.
+        for model, p in PRICING.items():
+            self.assertAlmostEqual(
+                p["cache_write_1h"], p["input"] * 2,
+                msg=f"{model} cache_write_1h should be 2x input"
+            )
+
     def test_combined_cost(self):
         cost = calc_cost("claude-haiku-4-5",
                          inp=500_000, out=100_000,

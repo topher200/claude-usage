@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.5 — TBD
+
+### Scanner
+
+- Cost now bills **1-hour cache writes at 2x input** instead of the 5-minute 1.25x rate. Claude Code splits cache-creation tokens into 5m and 1h TTL buckets under `usage.cache_creation`; the scanner records the 1h portion (`cache_creation_1h_tokens` on `turns`, `total_cache_creation_1h` on `sessions`) so each is priced correctly. Heavy Claude Code sessions are dominated by 1h cache, so this materially raises estimated cost. Existing databases need a full rescan (dashboard **Rescan** button, or delete `~/.claude/usage.db` and re-scan) to backfill the split for already-processed transcripts.
+
+### Dashboard
+
+- Estimated cost across all tables and charts reflects the 5m/1h cache-write split (`calcCost` now takes the 1h portion; the CLI/dashboard `PRICING` tables gain a `cache_write_1h` rate). The pricing-parity test now checks the cache-write rates too, not just input/output.
+
 ## v1.5.4 — 2026-07-01
 
 ### Dashboard

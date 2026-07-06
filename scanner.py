@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 # runtime version has to live here as a constant. Keep this in lockstep with the
 # top CHANGELOG heading and vscode-extension/package.json (a parity test guards
 # all three; see tests/test_version.py).
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 XCODE_PROJECTS_DIR = Path.home() / "Library" / "Developer" / "Xcode" / "CodingAssistant" / "ClaudeAgentConfig" / "projects"
@@ -59,6 +59,7 @@ def init_db(conn):
             total_output_tokens     INTEGER DEFAULT 0,
             total_cache_read        INTEGER DEFAULT 0,
             total_cache_creation    INTEGER DEFAULT 0,
+            total_cache_creation_1h INTEGER DEFAULT 0,
             model           TEXT,
             turn_count      INTEGER DEFAULT 0,
             topic           TEXT
@@ -73,6 +74,7 @@ def init_db(conn):
             output_tokens           INTEGER DEFAULT 0,
             cache_read_tokens       INTEGER DEFAULT 0,
             cache_creation_tokens   INTEGER DEFAULT 0,
+            cache_creation_1h_tokens INTEGER DEFAULT 0,
             tool_name               TEXT,
             cwd                     TEXT,
             message_id              TEXT,
@@ -115,6 +117,10 @@ def init_db(conn):
     # Subagent attribution columns (added in a later schema version)
     _ensure_column(conn, "turns", "is_subagent", "INTEGER DEFAULT 0")
     _ensure_column(conn, "turns", "agent_id", "TEXT")
+    # 1-hour cache-write tokens (subset of cache_creation_tokens), so cost can
+    # bill the 1h portion at 2x input instead of the 5m 1.25x rate.
+    _ensure_column(conn, "turns", "cache_creation_1h_tokens", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "sessions", "total_cache_creation_1h", "INTEGER DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_subagent ON turns(is_subagent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_agent_id ON turns(agent_id)")
     # Session topic (from custom-title / ai-title records; added in a later
@@ -219,6 +225,20 @@ def _backfill_topics(conn, jsonl_files):
             "AND (topic IS NULL OR topic = '')", (title, sid))
     conn.commit()
     return len(titles)
+
+
+def cache_1h_tokens(usage):
+    """Return the 1-hour-TTL portion of a turn's cache-creation tokens.
+
+    Claude Code splits cache writes into 5-minute and 1-hour TTL buckets under
+    ``usage.cache_creation``; the 1h bucket bills at 2x input vs 1.25x for 5m.
+    ``cache_creation_input_tokens`` is the combined total, so this returns just
+    the 1h subset (0 when the breakdown is absent).
+    """
+    cc = usage.get("cache_creation")
+    if isinstance(cc, dict):
+        return cc.get("ephemeral_1h_input_tokens", 0) or 0
+    return 0
 
 
 def project_name_from_cwd(cwd):
@@ -406,6 +426,7 @@ def parse_jsonl_file(filepath):
                     output_tokens = usage.get("output_tokens", 0) or 0
                     cache_read = usage.get("cache_read_input_tokens", 0) or 0
                     cache_creation = usage.get("cache_creation_input_tokens", 0) or 0
+                    cache_creation_1h = cache_1h_tokens(usage)
 
                     # Only record turns that have actual token usage
                     if input_tokens + output_tokens + cache_read + cache_creation == 0:
@@ -429,6 +450,7 @@ def parse_jsonl_file(filepath):
                         "output_tokens": output_tokens,
                         "cache_read_tokens": cache_read,
                         "cache_creation_tokens": cache_creation,
+                        "cache_creation_1h_tokens": cache_creation_1h,
                         "tool_name": tool_name,
                         "cwd": cwd,
                         "message_id": message_id,
@@ -458,6 +480,7 @@ def aggregate_sessions(session_metas, turns):
         "total_output_tokens": 0,
         "total_cache_read": 0,
         "total_cache_creation": 0,
+        "total_cache_creation_1h": 0,
         "turn_count": 0,
         "model": None,
     })
@@ -469,6 +492,7 @@ def aggregate_sessions(session_metas, turns):
         s["total_output_tokens"] += t["output_tokens"]
         s["total_cache_read"] += t["cache_read_tokens"]
         s["total_cache_creation"] += t["cache_creation_tokens"]
+        s["total_cache_creation_1h"] += t.get("cache_creation_1h_tokens", 0)
         s["turn_count"] += 1
         if t["model"]:
             session_model_counts[t["session_id"]][t["model"]] += 1
@@ -507,14 +531,15 @@ def upsert_sessions(conn, sessions):
                 INSERT INTO sessions
                     (session_id, project_name, first_timestamp, last_timestamp,
                      git_branch, total_input_tokens, total_output_tokens,
-                     total_cache_read, total_cache_creation, model, turn_count,
-                     topic)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     total_cache_read, total_cache_creation,
+                     total_cache_creation_1h, model, turn_count, topic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 s["session_id"], s["project_name"], s["first_timestamp"],
                 s["last_timestamp"], s["git_branch"],
                 s["total_input_tokens"], s["total_output_tokens"],
                 s["total_cache_read"], s["total_cache_creation"],
+                s.get("total_cache_creation_1h", 0),
                 s["model"], s["turn_count"], s.get("topic")
             ))
         else:
@@ -543,6 +568,7 @@ def upsert_sessions(conn, sessions):
                     total_output_tokens = total_output_tokens + ?,
                     total_cache_read = total_cache_read + ?,
                     total_cache_creation = total_cache_creation + ?,
+                    total_cache_creation_1h = total_cache_creation_1h + ?,
                     turn_count = turn_count + ?,
                     model = ?,
                     topic = ?
@@ -551,6 +577,7 @@ def upsert_sessions(conn, sessions):
                 s["last_timestamp"],
                 s["total_input_tokens"], s["total_output_tokens"],
                 s["total_cache_read"], s["total_cache_creation"],
+                s.get("total_cache_creation_1h", 0),
                 s["turn_count"], model_to_set, topic_to_set,
                 s["session_id"]
             ))
@@ -560,13 +587,14 @@ def insert_turns(conn, turns):
     conn.executemany("""
         INSERT OR IGNORE INTO turns
             (session_id, timestamp, model, input_tokens, output_tokens,
-             cache_read_tokens, cache_creation_tokens, tool_name, cwd, message_id,
-             is_subagent, agent_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens,
+             tool_name, cwd, message_id, is_subagent, agent_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         (t["session_id"], t["timestamp"], t["model"],
          t["input_tokens"], t["output_tokens"],
          t["cache_read_tokens"], t["cache_creation_tokens"],
+         t.get("cache_creation_1h_tokens", 0),
          t["tool_name"], t["cwd"], t.get("message_id", ""),
          t.get("is_subagent", 0), t.get("agent_id"))
         for t in turns
@@ -732,6 +760,7 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                             output_tokens = usage.get("output_tokens", 0) or 0
                             cache_read = usage.get("cache_read_input_tokens", 0) or 0
                             cache_creation = usage.get("cache_creation_input_tokens", 0) or 0
+                            cache_creation_1h = cache_1h_tokens(usage)
 
                             if input_tokens + output_tokens + cache_read + cache_creation == 0:
                                 continue
@@ -753,6 +782,7 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                                 "output_tokens": output_tokens,
                                 "cache_read_tokens": cache_read,
                                 "cache_creation_tokens": cache_creation,
+                                "cache_creation_1h_tokens": cache_creation_1h,
                                 "tool_name": tool_name,
                                 "cwd": cwd,
                                 "message_id": message_id,
@@ -804,6 +834,7 @@ def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
                 total_output_tokens = COALESCE((SELECT SUM(output_tokens) FROM turns WHERE turns.session_id = sessions.session_id), 0),
                 total_cache_read = COALESCE((SELECT SUM(cache_read_tokens) FROM turns WHERE turns.session_id = sessions.session_id), 0),
                 total_cache_creation = COALESCE((SELECT SUM(cache_creation_tokens) FROM turns WHERE turns.session_id = sessions.session_id), 0),
+                total_cache_creation_1h = COALESCE((SELECT SUM(cache_creation_1h_tokens) FROM turns WHERE turns.session_id = sessions.session_id), 0),
                 turn_count = COALESCE((SELECT COUNT(*) FROM turns WHERE turns.session_id = sessions.session_id), 0)
         """)
         conn.commit()
