@@ -462,16 +462,20 @@ class TestHTMLTemplate(unittest.TestCase):
 class TestPricingParity(unittest.TestCase):
     """Verify CLI and dashboard pricing tables stay in sync."""
 
+    FIELDS = ("input", "output", "cache_write", "cache_write_1h", "cache_read")
+
     def _extract_js_pricing(self):
         """Extract pricing values from the dashboard JS PRICING object."""
         import re
         prices = {}
-        for match in re.finditer(
-            r"'(claude-[^']+)':\s*\{\s*input:\s*([\d.]+),\s*output:\s*([\d.]+)",
-            HTML_TEMPLATE
-        ):
-            model, inp, out = match.group(1), float(match.group(2)), float(match.group(3))
-            prices[model] = {"input": inp, "output": out}
+        for match in re.finditer(r"'(claude-[^']+)':\s*\{([^}]*)\}", HTML_TEMPLATE):
+            model, body = match.group(1), match.group(2)
+            entry = {}
+            for field in self.FIELDS:
+                fm = re.search(rf"\b{field}:\s*([\d.]+)", body)
+                if fm:
+                    entry[field] = float(fm.group(1))
+            prices[model] = entry
         return prices
 
     def test_all_cli_models_in_dashboard(self):
@@ -484,14 +488,11 @@ class TestPricingParity(unittest.TestCase):
         from cli import PRICING as CLI_PRICING
         js_prices = self._extract_js_pricing()
         for model in CLI_PRICING:
-            self.assertAlmostEqual(
-                CLI_PRICING[model]["input"], js_prices[model]["input"],
-                msg=f"{model} input price mismatch"
-            )
-            self.assertAlmostEqual(
-                CLI_PRICING[model]["output"], js_prices[model]["output"],
-                msg=f"{model} output price mismatch"
-            )
+            for field in self.FIELDS:
+                self.assertAlmostEqual(
+                    CLI_PRICING[model][field], js_prices[model].get(field),
+                    msg=f"{model} {field} price mismatch between cli.py and dashboard.py"
+                )
 
 
 if __name__ == "__main__":
