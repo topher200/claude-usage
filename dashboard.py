@@ -228,11 +228,44 @@ def get_dashboard_data(db_path=DB_PATH):
         "status":         r["status"],
     } for r in top_dispatch_rows]
 
+    # ── Daily per-project per-model (for the daily project spend charts) ──────
+    daily_project_rows = conn.execute("""
+        SELECT
+            substr(t.timestamp, 1, 10)                  as day,
+            COALESCE(s.project_name, 'unknown')          as project,
+            COALESCE(NULLIF(t.model, ''), 'unknown')     as model,
+            COALESCE(t.is_subagent, 0)                   as is_subagent,
+            SUM(t.input_tokens)                          as input,
+            SUM(t.output_tokens)                         as output,
+            SUM(t.cache_read_tokens)                     as cache_read,
+            SUM(t.cache_creation_tokens)                 as cache_creation,
+            SUM(t.cache_creation_1h_tokens)              as cache_creation_1h,
+            COUNT(*)                                     as turns
+        FROM turns t
+        LEFT JOIN sessions s ON t.session_id = s.session_id
+        GROUP BY day, project, t.model, is_subagent
+        ORDER BY day, project, t.model
+    """).fetchall()
+
+    daily_by_project = [{
+        "day":            r["day"],
+        "project":        r["project"],
+        "model":          r["model"],
+        "is_subagent":    r["is_subagent"] or 0,
+        "input":          r["input"] or 0,
+        "output":         r["output"] or 0,
+        "cache_read":     r["cache_read"] or 0,
+        "cache_creation": r["cache_creation"] or 0,
+        "cache_creation_1h": r["cache_creation_1h"] or 0,
+        "turns":          r["turns"] or 0,
+    } for r in daily_project_rows]
+
     conn.close()
 
     return {
         "all_models":      all_models,
         "daily_by_model":  daily_by_model,
+        "daily_by_project": daily_by_project,
         "hourly_by_model": hourly_by_model,
         "sessions_all":    sessions_all,
         "subagent_by_type": subagent_by_type,
@@ -524,12 +557,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       Graphs <span class="jump-caret">&#9662;</span>
     </button>
     <div class="jump-panel">
-      <button class="jump-link" data-target="sec-daily">Daily</button>
       <button class="jump-link" data-target="sec-daily-cost">Daily Spend</button>
+      <button class="jump-link" data-target="sec-daily-project">Spend by Project</button>
+      <button class="jump-link" data-target="sec-daily-project-model">Spend by Project &amp; Model</button>
       <button class="jump-link" data-target="sec-hourly">Distribution</button>
       <button class="jump-link" data-target="sec-models">By Model</button>
       <button class="jump-link" data-target="sec-projects">Top Projects</button>
       <button class="jump-link" data-target="sec-subagents">Subagents</button>
+      <button class="jump-link" data-target="sec-daily">Daily Tokens</button>
     </div>
   </div>
   <div class="jump-menu jump-menu-end">
@@ -548,7 +583,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </nav>
 
 <div class="container">
-  <div class="stats-row" id="stats-row"></div>
   <div class="table-card" id="sec-spend-limit" data-card="spend-limit">
     <div class="section-header">
       <div class="section-title"><span class="card-caret">&#9656;</span>Monthly Spend Limit</div>
@@ -582,13 +616,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
   <div class="charts-grid">
-    <div class="chart-card wide" id="sec-daily" data-card="daily">
-      <h2><span class="card-caret">&#9656;</span><span id="daily-chart-title">Daily Token Usage</span></h2>
-      <div class="chart-wrap tall"><canvas id="chart-daily"></canvas></div>
-    </div>
     <div class="chart-card wide" id="sec-daily-cost" data-card="daily-cost">
       <h2><span class="card-caret">&#9656;</span><span id="daily-cost-chart-title">Daily Spend by Model</span></h2>
       <div class="chart-wrap tall"><canvas id="chart-daily-cost"></canvas></div>
+    </div>
+    <div class="chart-card wide" id="sec-daily-project" data-card="daily-project">
+      <h2><span class="card-caret">&#9656;</span><span id="daily-project-chart-title">Daily Spend by Project</span></h2>
+      <div class="chart-wrap tall"><canvas id="chart-daily-project"></canvas></div>
+    </div>
+    <div class="chart-card wide" id="sec-daily-project-model" data-card="daily-project-model">
+      <h2><span class="card-caret">&#9656;</span><span id="daily-project-model-chart-title">Daily Spend by Project per Model</span></h2>
+      <div class="chart-wrap tall"><canvas id="chart-daily-project-model"></canvas></div>
     </div>
     <div class="chart-card wide" id="sec-hourly" data-card="hourly">
       <div class="chart-header">
@@ -616,7 +654,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <h2><span class="card-caret">&#9656;</span><span id="subagent-chart-title">Subagent Tokens by Type</span></h2>
       <div class="chart-wrap"><canvas id="chart-subagent"></canvas></div>
     </div>
+    <div class="chart-card wide" id="sec-daily" data-card="daily">
+      <h2><span class="card-caret">&#9656;</span><span id="daily-chart-title">Daily Token Usage</span></h2>
+      <div class="chart-wrap tall"><canvas id="chart-daily"></canvas></div>
+    </div>
   </div>
+  <div class="stats-row" id="stats-row"></div>
   <div class="table-card" id="sec-cost-model" data-card="cost-by-model">
     <div class="section-title"><span class="card-caret">&#9656;</span>Cost by Model</div>
     <table>
@@ -976,7 +1019,7 @@ Chart.defaults.plugins.tooltip.callbacks.labelColor = (ctx) => {
 // series the user toggled off. We track hidden series by label per chart and
 // reapply on rebuild: dataset charts via `dataset.hidden`, the doughnut via
 // per-slice data visibility (see applyModelHidden).
-const hiddenSeries = { daily: new Set(), dailyCost: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
+const hiddenSeries = { daily: new Set(), dailyCost: new Set(), dailyProject: new Set(), dailyProjectModel: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
 function legendToggle(key) {
   return (e, item, legend) => {
     const ci = legend.chart;
@@ -1425,6 +1468,77 @@ function applyFilter() {
   }
   const spendDays = [...spendDaySet].sort();
 
+  // Daily spend by project, and by project+model, filtered by model + date
+  // range like the other daily series. Both cap to the top N by total cost
+  // over the filtered range and fold the rest into a single "Other" series,
+  // so a long tail of one-off projects doesn't turn the legend into noise.
+  const filteredDailyProject = (rawData.daily_by_project || []).filter(r =>
+    selectedModels.has(r.model) && (!start || r.day >= start) && (!end || r.day <= end)
+  );
+
+  const PROJECT_SPEND_TOP_N = 8;
+  const projSpendByDay = {};   // project -> day -> cost
+  const projSpendTotal = {};   // project -> total cost
+  const projModelByDay = {};   // "project\x00model" -> day -> cost
+  const projModelTotal = {};   // "project\x00model" -> total cost
+  const projModelDaySet = new Set();
+  for (const r of filteredDailyProject) {
+    const cost = calcCost(r.model, r.input, r.output, r.cache_read, r.cache_creation, r.cache_creation_1h);
+    projSpendByDay[r.project] = projSpendByDay[r.project] || {};
+    projSpendByDay[r.project][r.day] = (projSpendByDay[r.project][r.day] || 0) + cost;
+    projSpendTotal[r.project] = (projSpendTotal[r.project] || 0) + cost;
+
+    const pmKey = r.project + '\x00' + r.model;
+    projModelByDay[pmKey] = projModelByDay[pmKey] || {};
+    projModelByDay[pmKey][r.day] = (projModelByDay[pmKey][r.day] || 0) + cost;
+    projModelTotal[pmKey] = (projModelTotal[pmKey] || 0) + cost;
+    projModelDaySet.add(r.day);
+  }
+  const projectSpendDays = [...projModelDaySet].sort();
+
+  const shortProjectLabel = p => p.length > 22 ? '…' + p.slice(-20) : p;
+
+  const rankedProjects = Object.keys(projSpendTotal).sort((a, b) => projSpendTotal[b] - projSpendTotal[a]);
+  const projectSpendSeries = rankedProjects.slice(0, PROJECT_SPEND_TOP_N).map((p, i) => ({
+    label: shortProjectLabel(p),
+    color: MODEL_COLORS[i % MODEL_COLORS.length],
+    byDay: projSpendByDay[p],
+  }));
+  const overflowProjects = rankedProjects.slice(PROJECT_SPEND_TOP_N);
+  if (overflowProjects.length) {
+    const byDay = {};
+    for (const p of overflowProjects) {
+      for (const [d, v] of Object.entries(projSpendByDay[p])) byDay[d] = (byDay[d] || 0) + v;
+    }
+    projectSpendSeries.push({ label: `Other (${overflowProjects.length})`, color: C.muted, byDay });
+  }
+
+  // Same top-N-plus-Other cap, but keyed by project+model so each bar segment
+  // shows which model drove a project's spend. Color reuses the per-model-family
+  // hue from the Daily Spend by Model chart, lightened per project rank within
+  // that model — so "Sonnet" segments read as one family across projects while
+  // still being distinguishable from each other.
+  const rankedProjectModels = Object.keys(projModelTotal).sort((a, b) => projModelTotal[b] - projModelTotal[a]);
+  const modelRank = {};
+  const projectModelSpendSeries = rankedProjectModels.slice(0, PROJECT_SPEND_TOP_N).map(key => {
+    const [project, model] = key.split('\x00');
+    const rank = modelRank[model] || 0;
+    modelRank[model] = rank + 1;
+    return {
+      label: `${shortProjectLabel(project)} · ${shortModelName(model)}`,
+      color: lightenHex(spendBaseColor(model), Math.min(rank * 0.22, 0.6)),
+      byDay: projModelByDay[key],
+    };
+  });
+  const overflowProjectModels = rankedProjectModels.slice(PROJECT_SPEND_TOP_N);
+  if (overflowProjectModels.length) {
+    const byDay = {};
+    for (const key of overflowProjectModels) {
+      for (const [d, v] of Object.entries(projModelByDay[key])) byDay[d] = (byDay[d] || 0) + v;
+    }
+    projectModelSpendSeries.push({ label: `Other (${overflowProjectModels.length})`, color: C.muted, byDay });
+  }
+
   // Top dispatches: filter by range + selected model. Keep the full filtered set
   // (already ranked by tokens server-side) so the table can page it like Recent
   // Sessions — show more/less plus CSV export of everything.
@@ -1435,6 +1549,8 @@ function applyFilter() {
   // Update daily chart title
   document.getElementById('daily-chart-title').textContent = 'Daily Token Usage \u2014 ' + RANGE_LABELS[selectedRange];
   document.getElementById('daily-cost-chart-title').textContent = 'Daily Spend by Model \u2014 ' + RANGE_LABELS[selectedRange];
+  document.getElementById('daily-project-chart-title').textContent = 'Daily Spend by Project \u2014 ' + RANGE_LABELS[selectedRange];
+  document.getElementById('daily-project-model-chart-title').textContent = 'Daily Spend by Project per Model \u2014 ' + RANGE_LABELS[selectedRange];
   document.getElementById('hourly-chart-title').textContent = 'Average Hourly Distribution \u2014 ' + RANGE_LABELS[selectedRange];
   document.getElementById('subagent-chart-title').textContent = 'Subagent Tokens by Type \u2014 ' + RANGE_LABELS[selectedRange];
 
@@ -1442,6 +1558,8 @@ function applyFilter() {
   renderSpendLimit();
   renderDailyChart(daily);
   renderDailyCostChart(spendDays, spendSeries);
+  renderProjectSpendChart(projectSpendDays, projectSpendSeries);
+  renderProjectModelSpendChart(projectSpendDays, projectModelSpendSeries);
   renderHourlyChart(hourlyAgg);
   renderModelChart(byModel);
   renderProjectChart(byProject);
@@ -2003,6 +2121,74 @@ function renderDailyCostChart(days, series) {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       plugins: {
         legend: { onClick: legendToggle('dailyCost'), labels: { color: C.axis, boxWidth: 12 } },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
+          footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
+        } }
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
+        y: { stacked: true, ticks: { color: C.axis, callback: v => fmtCost(v) }, grid: { color: C.border } },
+      }
+    }
+  });
+}
+
+function renderProjectSpendChart(days, series) {
+  const ctx = document.getElementById('chart-daily-project').getContext('2d');
+  if (charts.dailyProject) charts.dailyProject.destroy();
+  if (!series.length) { charts.dailyProject = null; return; }
+  charts.dailyProject = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: days,
+      datasets: series.map(s => ({
+        label: s.label,
+        hidden: hiddenSeries.dailyProject.has(s.label),
+        data: days.map(d => s.byDay[d] || 0),
+        backgroundColor: s.color,
+        hoverBackgroundColor: s.color,
+        stack: 'cost',
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+      plugins: {
+        legend: { onClick: legendToggle('dailyProject'), labels: { color: C.axis, boxWidth: 12 } },
+        tooltip: { callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
+          footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
+        } }
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
+        y: { stacked: true, ticks: { color: C.axis, callback: v => fmtCost(v) }, grid: { color: C.border } },
+      }
+    }
+  });
+}
+
+function renderProjectModelSpendChart(days, series) {
+  const ctx = document.getElementById('chart-daily-project-model').getContext('2d');
+  if (charts.dailyProjectModel) charts.dailyProjectModel.destroy();
+  if (!series.length) { charts.dailyProjectModel = null; return; }
+  charts.dailyProjectModel = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: days,
+      datasets: series.map(s => ({
+        label: s.label,
+        hidden: hiddenSeries.dailyProjectModel.has(s.label),
+        data: days.map(d => s.byDay[d] || 0),
+        backgroundColor: s.color,
+        hoverBackgroundColor: s.color,
+        stack: 'cost',
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+      plugins: {
+        legend: { onClick: legendToggle('dailyProjectModel'), labels: { color: C.axis, boxWidth: 12, font: { size: 10 } } },
         tooltip: { callbacks: {
           label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
           footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
