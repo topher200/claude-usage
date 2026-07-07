@@ -90,9 +90,7 @@ Client-side UI state (collapsed sections, the 24h update-check cache) is kept in
 
 Topher's own dev machine runs a persistent dashboard via a systemd user unit (`~/.config/systemd/user/claude-usage.service`), `HOST=localhost PORT=9898`, independent of anything a coding agent starts for testing. `systemctl --user status claude-usage.service` shows whether it's up.
 
-Before running `pkill -f "cli.py dashboard"`, `pkill -f dashboard.py`, or similar broad-match kill commands: check `ss -tlnp | grep <port>` or `ps aux | grep dashboard` first and kill the specific PID you started, not a pattern match. A broad `pkill -f "cli.py dashboard"` matches the systemd-managed process too, and since it exits via `SIGTERM` (not a crash), `Restart=on-failure` does **not** bring it back — it just stays dead until someone notices and runs `systemctl --user start claude-usage.service`.
-
-When testing dashboard changes, prefer a throwaway port (`PORT=8080 python cli.py dashboard`) over the default, so there's no ambiguity about which process a kill command should target.
+After completing a new feature or any other changes, restart the systemd version so we pick up the latest. Ensure that it is running after any work that changes the service.
 
 ## Testing notes
 
