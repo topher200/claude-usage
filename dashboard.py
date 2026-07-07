@@ -297,7 +297,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --red: #DC322F;
     --raised: #E4DCC8;  /* hover / raised surfaces — top of the elevation ladder */
     --selected: #E9E2CD;  /* selected chips / tabs (neutral, not accent) */
-    --jump-h: 45px;  /* sticky jump-bar height; JS keeps it in sync for scroll offsets */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
@@ -458,37 +457,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .footer-content a:hover { text-decoration: underline; }
   .footer-content a.update-link { color: var(--accent); font-weight: 600; }
 
-  /* Jump bar — a sticky table-of-contents for a long report. Styled as a sibling
-     of the filter bar (same card surface + bottom border) so it reads as part of
-     the same control strip. It pins to the viewport top once the header/filter
-     scroll away. z-index sits below the model panel (50) so the dropdown still
-     overlays it. */
-  /* Sticky table-of-contents for the long report: three compact entries —
-     Overview, plus Graphs and Tables menus that reveal their sections on hover
-     (or keyboard focus). Stays small so it never crowds the narrow VS Code panel. */
-  #jump-bar { position: sticky; top: 0; z-index: 20; background: var(--card); border-bottom: 1px solid var(--border); padding: 7px 24px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
-  .jump-menu { position: relative; }
-  .jump-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; transition: background 0.12s, color 0.12s, border-color 0.12s; }
-  .jump-trigger svg { display: block; }
-  .jump-caret { font-size: 9px; }
-  .jump-trigger:hover, .jump-menu:focus-within .jump-trigger { color: var(--text); background: var(--raised); }
-  .jump-trigger.active { color: var(--text); border-color: var(--border); }
-  .jump-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 50; min-width: 160px; display: none; flex-direction: column; gap: 2px; padding: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
-  /* Invisible bridge over the 5px gap so the menu doesn't close as the pointer
-     travels from the trigger down to the panel. */
-  .jump-panel::before { content: ""; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
-  .jump-menu-end .jump-panel { left: auto; right: 0; }
-  .jump-menu:hover .jump-panel, .jump-menu:focus-within .jump-panel { display: flex; }
-  .jump-link { padding: 3px 11px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; transition: background 0.12s, color 0.12s, border-color 0.12s; }
-  .jump-panel .jump-link { display: block; width: 100%; text-align: left; padding: 5px 10px; }
-  .jump-link:hover { color: var(--text); background: var(--raised); }
-  .jump-link.active { color: var(--text); background: var(--selected); border-color: var(--border); font-weight: 600; }
   /* Inline info affordance (e.g. the dispatches table) — native title tooltip. */
   .info-icon { display: inline-flex; align-items: center; vertical-align: middle; margin-left: 3px; color: var(--muted); cursor: help; }
   .info-icon svg { display: block; }
   .info-icon:hover { color: var(--text); }
-  /* Anchored sections clear the sticky bar when jumped/collapsed to. */
-  .stats-row, .chart-card, .table-card { scroll-margin-top: calc(var(--jump-h) + 14px); }
 
   /* Collapsible cards — a full section fold, independent of in-table Show
      more/less (which only pages rows). Collapsing hides the card body and its
@@ -498,7 +470,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .collapsed .card-caret { transform: rotate(0deg); }
   .chart-card > h2, .chart-header > h2, .section-title { cursor: pointer; user-select: none; }
   .chart-card > h2:hover, .chart-header > h2:hover, .section-title:hover { color: var(--text); }
-  .jump-link:focus-visible, .jump-trigger:focus-visible, .info-icon:focus-visible, .chart-card > h2:focus-visible, .chart-header > h2:focus-visible, .section-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .info-icon:focus-visible, .chart-card > h2:focus-visible, .chart-header > h2:focus-visible, .section-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .chart-card.collapsed > h2, .chart-card.collapsed > .chart-header { margin-bottom: 0; }
   .table-card.collapsed > .section-title, .table-card.collapsed > .section-header { margin-bottom: 0; }
   .chart-card.collapsed > *:not(h2):not(.chart-header),
@@ -549,39 +521,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </select>
   </div>
 </div>
-
-<nav id="jump-bar" aria-label="Jump to section">
-  <button class="jump-link" data-target="stats-row">Overview</button>
-  <div class="jump-menu">
-    <button type="button" class="jump-trigger" aria-haspopup="true" aria-expanded="false">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M8 17v-4"/><path d="M13 17V8"/><path d="M18 17v-7"/></svg>
-      Graphs <span class="jump-caret">&#9662;</span>
-    </button>
-    <div class="jump-panel">
-      <button class="jump-link" data-target="sec-daily-cost">Daily Spend</button>
-      <button class="jump-link" data-target="sec-daily-project">Spend by Project</button>
-      <button class="jump-link" data-target="sec-daily-project-model">Spend by Project &amp; Model</button>
-      <button class="jump-link" data-target="sec-hourly">Distribution</button>
-      <button class="jump-link" data-target="sec-models">By Model</button>
-      <button class="jump-link" data-target="sec-projects">Top Projects</button>
-      <button class="jump-link" data-target="sec-subagents">Subagents</button>
-      <button class="jump-link" data-target="sec-daily">Daily Tokens</button>
-    </div>
-  </div>
-  <div class="jump-menu jump-menu-end">
-    <button type="button" class="jump-trigger" aria-haspopup="true" aria-expanded="false">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/></svg>
-      Tables <span class="jump-caret">&#9662;</span>
-    </button>
-    <div class="jump-panel">
-      <button class="jump-link" data-target="sec-cost-model">Cost by Model</button>
-      <button class="jump-link" data-target="sec-dispatches">Dispatches</button>
-      <button class="jump-link" data-target="sec-sessions">Sessions</button>
-      <button class="jump-link" data-target="sec-cost-project">Cost by Project</button>
-      <button class="jump-link" data-target="sec-cost-branch">Cost by Project &amp; Branch</button>
-    </div>
-  </div>
-</nav>
 
 <div class="container">
   <div class="table-card" id="sec-spend-limit" data-card="spend-limit">
@@ -2809,25 +2748,9 @@ function toggleCard(card) {
   if (!collapsed) requestAnimationFrame(() => resizeChartsIn(card));
 }
 
-function jumpToSection(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (el.dataset.card && el.classList.contains('collapsed')) toggleCard(el);  // expand before scrolling
-  el.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
-}
-
-function initSectionNav() {
-  const bar = document.getElementById('jump-bar');
+function initCollapsibleCards() {
   const container = document.querySelector('.container');
   if (!container) return;
-
-  // Keep --jump-h synced to the bar's real height so scroll-margin clears it
-  // even when the links wrap to a second row on a narrow panel.
-  const syncJumpHeight = () => {
-    if (bar) document.documentElement.style.setProperty('--jump-h', bar.offsetHeight + 'px');
-  };
-  syncJumpHeight();
-  window.addEventListener('resize', syncJumpHeight);
 
   // Restore persisted collapse state + make each title an accessible toggle.
   const collapsed = loadCollapsedSet();
@@ -2853,61 +2776,10 @@ function initSectionNav() {
   };
   container.addEventListener('click', onTitleActivate);
   container.addEventListener('keydown', onTitleActivate);
-
-  // Jump links teleport to a section (expanding it first if collapsed). Blur the
-  // clicked item so the hover/focus dropdown it lives in closes after the jump.
-  if (bar) bar.addEventListener('click', (e) => {
-    const link = e.target.closest('.jump-link');
-    if (link) { jumpToSection(link.dataset.target); link.blur(); }
-  });
-
-  // Mirror open/closed state on the menu triggers for assistive tech, and let
-  // Escape close an open menu.
-  document.querySelectorAll('.jump-menu').forEach(menu => {
-    const trig = menu.querySelector('.jump-trigger');
-    const sync = (open) => { if (trig) trig.setAttribute('aria-expanded', String(open)); };
-    // A mouse click must not focus (and thus pin) the trigger — otherwise the
-    // panel stays open after the pointer leaves and fights the next hover. Tab
-    // focus still works (it doesn't go through mousedown), keeping it keyboard-open.
-    if (trig) trig.addEventListener('mousedown', (e) => e.preventDefault());
-    menu.addEventListener('mouseenter', () => sync(true));
-    menu.addEventListener('mouseleave', () => sync(false));
-    menu.addEventListener('focusin', () => sync(true));
-    menu.addEventListener('focusout', () => sync(false));
-    menu.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.activeElement) document.activeElement.blur(); });
-  });
-
-  // Scroll-spy: highlight the link for the topmost section under the bar, and
-  // mark the parent Graphs/Tables trigger so the closed menu shows where you are.
-  const links = [...document.querySelectorAll('.jump-link')];
-  const menus = [...document.querySelectorAll('.jump-menu')];
-  const targets = links.map(l => document.getElementById(l.dataset.target)).filter(Boolean)
-    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);
-  let spyScheduled = false;
-  const updateActive = () => {
-    spyScheduled = false;
-    const line = (bar ? bar.offsetHeight : 45) + 16;
-    let activeId = targets.length ? targets[0].id : null;
-    for (const t of targets) {
-      if (t.getBoundingClientRect().top - line <= 1) activeId = t.id; else break;
-    }
-    // At the very bottom the last (often short) section may never reach the line.
-    if (targets.length && (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 4)
-      activeId = targets[targets.length - 1].id;
-    links.forEach(l => l.classList.toggle('active', l.dataset.target === activeId));
-    menus.forEach(menu => {
-      const trig = menu.querySelector('.jump-trigger');
-      if (trig) trig.classList.toggle('active', !!menu.querySelector('.jump-link.active'));
-    });
-  };
-  window.addEventListener('scroll', () => {
-    if (!spyScheduled) { spyScheduled = true; requestAnimationFrame(updateActive); }
-  }, { passive: true });
-  updateActive();
 }
 
 initFooterMeta();
-initSectionNav();
+initCollapsibleCards();
 loadData();
 scheduleAutoRefresh();
 </script>
