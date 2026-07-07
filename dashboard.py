@@ -285,17 +285,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script>window.APP_CONFIG = __APP_CONFIG_JSON__;</script>
 <style>
   :root {
-    --bg: #161617;      /* page base */
-    --card: #1E1F20;    /* raised one step above the page */
-    --border: #2C2D2E;
-    --text: #BFBFBF;
-    --muted: #4F4F50;
-    --accent: #d97757;
-    --blue: #48A0C7;
-    --green: #74C991;
-    --red: #C74E39;
-    --raised: #2E2F31;  /* hover / raised surfaces — top of the elevation ladder */
-    --selected: #262626;  /* selected chips / tabs (neutral, not accent) */
+    /* Solarized Light */
+    --bg: #FDF6E3;      /* base3 — page base */
+    --card: #EEE8D5;    /* base2 — raised one step above the page */
+    --border: #D3CBB7;
+    --text: #586E75;    /* base01 */
+    --muted: #93A1A1;   /* base1 */
+    --accent: #CB4B16;  /* orange */
+    --blue: #268BD2;
+    --green: #859900;
+    --red: #DC322F;
+    --raised: #E4DCC8;  /* hover / raised surfaces — top of the elevation ladder */
+    --selected: #E9E2CD;  /* selected chips / tabs (neutral, not accent) */
     --jump-h: 45px;  /* sticky jump-bar height; JS keeps it in sync for scroll offsets */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -303,15 +304,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   /* VS Code-style scrollbars. The dashboard renders inside a webview iframe,
      which doesn't inherit VS Code's --vscode-* theme variables, so we set the
-     scrollbar here: no arrows, grey thumb (#28292B, #8B8B8D on hover) over a
-     #121314 track, in a 21px gutter. Also fits the dark UI standalone. */
-  * { scrollbar-width: auto; scrollbar-color: #28292B #121314; }
+     scrollbar here: no arrows, tan thumb (#D3CBB7, #93A1A1 on hover) over an
+     #EEE8D5 track, in a 21px gutter. Also fits the light UI standalone. */
+  * { scrollbar-width: auto; scrollbar-color: #D3CBB7 #EEE8D5; }
   ::-webkit-scrollbar { width: 21px; height: 21px; }
-  ::-webkit-scrollbar-track { background: #121314; }
-  ::-webkit-scrollbar-thumb { background-color: #28292B; border: 3px solid transparent; background-clip: padding-box; }
-  ::-webkit-scrollbar-thumb:hover { background-color: #8B8B8D; }
-  ::-webkit-scrollbar-thumb:active { background-color: #8B8B8D; }
-  ::-webkit-scrollbar-corner { background: #121314; }
+  ::-webkit-scrollbar-track { background: #EEE8D5; }
+  ::-webkit-scrollbar-thumb { background-color: #D3CBB7; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: #93A1A1; }
+  ::-webkit-scrollbar-thumb:active { background-color: #93A1A1; }
+  ::-webkit-scrollbar-corner { background: #EEE8D5; }
 
   header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
   header h1 { font-size: 18px; font-weight: 600; color: var(--text); }
@@ -919,76 +920,75 @@ function fmtCost(c)    { return '$' + c.toLocaleString(undefined, { minimumFract
 function fmtCostBig(c) { return '$' + c.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 // ── Chart colors ───────────────────────────────────────────────────────────
-// Warm/neutral palette kept in sync with the CSS :root variables so charts match
-// the Claude Code interface (less blue). Chart legends/axes use C.axis (a touch
-// lighter than --muted so small labels stay legible on the dark card); grid uses
-// C.border.
+// Solarized Light, kept in sync with the CSS :root variables so charts match
+// the page. Chart legends/axes use C.axis (a touch darker than --muted so
+// small labels stay legible on the light card); grid uses C.border.
 const C = {
-  text:   '#BFBFBF',
-  muted:  '#4F4F50',
-  axis:   '#6F6F70',
-  border: '#2C2D2E',
-  card:   '#1E1F20',
-  blue:   '#48A0C7',
-  green:  '#74C991',
-  red:    '#C74E39',
-  accent: '#d97757',
-  amber:  '#D9A84E',
-  purple: '#9B7EC7',
-  teal:   '#5BB8A3',
-  mauve:  '#C77E9B',
+  text:   '#586E75',
+  muted:  '#93A1A1',
+  axis:   '#657B83',
+  border: '#D3CBB7',
+  card:   '#EEE8D5',
+  blue:   '#268BD2',
+  green:  '#859900',
+  red:    '#DC322F',
+  accent: '#CB4B16',
+  amber:  '#B58900',
+  purple: '#6C71C4',
+  teal:   '#2AA198',
+  mauve:  '#D33682',
 };
 const TOKEN_COLORS = {
-  input:          'rgba(72,160,199,0.85)',   // blue
-  output:         'rgba(217,119,87,0.85)',    // accent / coral
-  cache_read:     'rgba(116,201,145,0.75)',   // green
-  cache_creation: 'rgba(217,168,78,0.75)',    // amber
+  input:          'rgba(38,139,210,0.85)',   // blue
+  output:         'rgba(203,75,22,0.85)',    // accent / orange
+  cache_read:     'rgba(133,153,0,0.85)',    // green
+  cache_creation: 'rgba(181,137,0,0.85)',    // yellow
 };
-// Hover lifts on a dark theme: bars/series go to full opacity (a touch brighter).
+// Hover lifts: bars/series go to full opacity (a touch bolder).
 const TOKEN_HOVER = {
-  input:          'rgba(72,160,199,1)',
-  output:         'rgba(217,119,87,1)',
-  cache_read:     'rgba(116,201,145,1)',
-  cache_creation: 'rgba(217,168,78,1)',
+  input:          'rgba(38,139,210,1)',
+  output:         'rgba(203,75,22,1)',
+  cache_read:     'rgba(133,153,0,1)',
+  cache_creation: 'rgba(181,137,0,1)',
 };
-// Donut / categorical palette — warm, Anthropic-leaning (clay, tan, sage, dusty
-// blue, mauve, ochre, taupe, terracotta) rather than a saturated rainbow.
-const MODEL_COLORS = ['#D97757','#C9A26B','#7FA98C','#6E97A8','#B98AA0','#D9A84E','#A88B6A','#C2705A'];
+// Donut / categorical palette — the full Solarized accent set (orange, yellow,
+// green, blue, magenta, violet, cyan, red) rather than a saturated rainbow.
+const MODEL_COLORS = ['#CB4B16','#B58900','#859900','#268BD2','#D33682','#6C71C4','#2AA198','#DC322F'];
 
-// Subagent type swatches (table tag tint) — warm/neutral, matching the palette.
+// Subagent type swatches (table tag tint), matching the palette.
 const AGENT_TYPE_COLORS = {
-  'general-purpose':   '#6E97A8',
-  'Explore':           '#9B7EC7',
-  'Plan':              '#D9A84E',
-  'claude-code-guide': '#48A0C7',
-  'auto-compact':      '#A88B6A',
-  'unknown':           '#4F4F50',
+  'general-purpose':   '#268BD2',
+  'Explore':           '#6C71C4',
+  'Plan':              '#B58900',
+  'claude-code-guide': '#2AA198',
+  'auto-compact':      '#657B83',
+  'unknown':           '#93A1A1',
 };
-function colorForAgentType(t) { return AGENT_TYPE_COLORS[t] || '#7FA98C'; }
+function colorForAgentType(t) { return AGENT_TYPE_COLORS[t] || '#859900'; }
 
 // Per-model-family swatches for the daily spend chart — subagent series reuse
-// the same family color, lightened, so "Opus" and "Opus Subagent" read as a
+// the same family color, darkened, so "Opus" and "Opus Subagent" read as a
 // matched pair rather than two unrelated colors.
 const SPEND_FAMILY_COLORS = {
-  fable: '#B98AA0', mythos: '#B98AA0',
-  opus: '#D97757', sonnet: '#6E97A8', haiku: '#7FA98C',
+  fable: '#D33682', mythos: '#D33682',
+  opus: '#CB4B16', sonnet: '#268BD2', haiku: '#859900',
 };
 function spendBaseColor(model) {
   const ml = (model || '').toLowerCase();
   for (const k of Object.keys(SPEND_FAMILY_COLORS)) {
     if (ml.includes(k)) return SPEND_FAMILY_COLORS[k];
   }
-  return '#A88B6A';
+  return '#6C71C4';
 }
-function lightenHex(hex, amt) {
+function darkenHex(hex, amt) {
   const n = parseInt(hex.slice(1), 16);
   const r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff;
-  const mix = (c) => Math.round(c + (255 - c) * amt);
+  const mix = (c) => Math.round(c * (1 - amt));
   return '#' + [mix(r), mix(g), mix(b)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 function colorForSpendSeries(model, isSubagent) {
   const base = spendBaseColor(model);
-  return isSubagent ? lightenHex(base, 0.45) : base;
+  return isSubagent ? darkenHex(base, 0.35) : base;
 }
 function fmtDuration(ms) {
   if (!ms || ms < 0) return '—';
@@ -1515,7 +1515,7 @@ function applyFilter() {
 
   // Same top-N-plus-Other cap, but keyed by project+model so each bar segment
   // shows which model drove a project's spend. Color reuses the per-model-family
-  // hue from the Daily Spend by Model chart, lightened per project rank within
+  // hue from the Daily Spend by Model chart, darkened per project rank within
   // that model — so "Sonnet" segments read as one family across projects while
   // still being distinguishable from each other.
   const rankedProjectModels = Object.keys(projModelTotal).sort((a, b) => projModelTotal[b] - projModelTotal[a]);
@@ -1526,7 +1526,7 @@ function applyFilter() {
     modelRank[model] = rank + 1;
     return {
       label: `${shortProjectLabel(project)} · ${shortModelName(model)}`,
-      color: lightenHex(spendBaseColor(model), Math.min(rank * 0.22, 0.6)),
+      color: darkenHex(spendBaseColor(model), Math.min(rank * 0.22, 0.6)),
       byDay: projModelByDay[key],
     };
   });
