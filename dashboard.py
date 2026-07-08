@@ -285,33 +285,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script>window.APP_CONFIG = __APP_CONFIG_JSON__;</script>
 <style>
   :root {
-    /* Solarized Light */
-    --bg: #FDF6E3;      /* base3 — page base */
-    --card: #EEE8D5;    /* base2 — raised one step above the page */
-    --border: #D3CBB7;
-    --text: #586E75;    /* base01 */
-    --muted: #93A1A1;   /* base1 */
-    --accent: #CB4B16;  /* orange */
-    --blue: #268BD2;
-    --green: #859900;
-    --red: #DC322F;
-    --raised: #E4DCC8;  /* hover / raised surfaces — top of the elevation ladder */
-    --selected: #E9E2CD;  /* selected chips / tabs (neutral, not accent) */
+    --bg: #F6F8FA;      /* page base */
+    --card: #FFFFFF;    /* raised one step above the page */
+    --border: #D0D7DE;
+    --text: #1F2328;
+    --muted: #656D76;
+    --accent: #D97757;
+    --blue: #0969DA;
+    --green: #1A7F37;
+    --red: #CF222E;
+    --raised: #EEF1F4;  /* hover / raised surfaces — top of the elevation ladder */
+    --selected: #E4E7EB;  /* selected chips / tabs (neutral, not accent) */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
 
   /* VS Code-style scrollbars. The dashboard renders inside a webview iframe,
      which doesn't inherit VS Code's --vscode-* theme variables, so we set the
-     scrollbar here: no arrows, tan thumb (#D3CBB7, #93A1A1 on hover) over an
-     #EEE8D5 track, in a 21px gutter. Also fits the light UI standalone. */
-  * { scrollbar-width: auto; scrollbar-color: #D3CBB7 #EEE8D5; }
+     scrollbar here: no arrows, grey thumb (#D0D7DE, #8C959F on hover) over an
+     #F6F8FA track, in a 21px gutter. Also fits the light UI standalone. */
+  * { scrollbar-width: auto; scrollbar-color: #D0D7DE #F6F8FA; }
   ::-webkit-scrollbar { width: 21px; height: 21px; }
-  ::-webkit-scrollbar-track { background: #EEE8D5; }
-  ::-webkit-scrollbar-thumb { background-color: #D3CBB7; border: 3px solid transparent; background-clip: padding-box; }
-  ::-webkit-scrollbar-thumb:hover { background-color: #93A1A1; }
-  ::-webkit-scrollbar-thumb:active { background-color: #93A1A1; }
-  ::-webkit-scrollbar-corner { background: #EEE8D5; }
+  ::-webkit-scrollbar-track { background: #F6F8FA; }
+  ::-webkit-scrollbar-thumb { background-color: #D0D7DE; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: #8C959F; }
+  ::-webkit-scrollbar-thumb:active { background-color: #8C959F; }
+  ::-webkit-scrollbar-corner { background: #F6F8FA; }
 
   header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
   header h1 { font-size: 18px; font-weight: 600; color: var(--text); }
@@ -859,65 +858,65 @@ function fmtCost(c)    { return '$' + c.toLocaleString(undefined, { minimumFract
 function fmtCostBig(c) { return '$' + c.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 // ── Chart colors ───────────────────────────────────────────────────────────
-// Solarized Light, kept in sync with the CSS :root variables so charts match
-// the page. Chart legends/axes use C.axis (a touch darker than --muted so
-// small labels stay legible on the light card); grid uses C.border.
+// Kept in sync with the CSS :root variables so charts match the page. Chart
+// legends/axes use C.axis (a touch darker than --muted so small labels stay
+// legible on the light card); grid uses C.border.
 const C = {
-  text:   '#586E75',
-  muted:  '#93A1A1',
-  axis:   '#657B83',
-  border: '#D3CBB7',
-  card:   '#EEE8D5',
-  blue:   '#268BD2',
-  green:  '#859900',
-  red:    '#DC322F',
-  accent: '#CB4B16',
-  amber:  '#B58900',
-  purple: '#6C71C4',
-  teal:   '#2AA198',
-  mauve:  '#D33682',
+  text:   '#1F2328',
+  muted:  '#656D76',
+  axis:   '#3D444D',
+  border: '#D0D7DE',
+  card:   '#FFFFFF',
+  blue:   '#0969DA',
+  green:  '#1A7F37',
+  red:    '#CF222E',
+  accent: '#D97757',
+  amber:  '#B08800',
+  purple: '#8250DF',
+  teal:   '#1B7C83',
+  mauve:  '#BF3989',
 };
 const TOKEN_COLORS = {
-  input:          'rgba(38,139,210,0.85)',   // blue
-  output:         'rgba(203,75,22,0.85)',    // accent / orange
-  cache_read:     'rgba(133,153,0,0.85)',    // green
-  cache_creation: 'rgba(181,137,0,0.85)',    // yellow
+  input:          'rgba(9,105,218,0.85)',    // blue
+  output:         'rgba(217,119,87,0.85)',   // accent / orange
+  cache_read:     'rgba(26,127,55,0.85)',    // green
+  cache_creation: 'rgba(176,136,0,0.85)',    // amber
 };
 // Hover lifts: bars/series go to full opacity (a touch bolder).
 const TOKEN_HOVER = {
-  input:          'rgba(38,139,210,1)',
-  output:         'rgba(203,75,22,1)',
-  cache_read:     'rgba(133,153,0,1)',
-  cache_creation: 'rgba(181,137,0,1)',
+  input:          'rgba(9,105,218,1)',
+  output:         'rgba(217,119,87,1)',
+  cache_read:     'rgba(26,127,55,1)',
+  cache_creation: 'rgba(176,136,0,1)',
 };
-// Donut / categorical palette — the full Solarized accent set (orange, yellow,
-// green, blue, magenta, violet, cyan, red) rather than a saturated rainbow.
-const MODEL_COLORS = ['#CB4B16','#B58900','#859900','#268BD2','#D33682','#6C71C4','#2AA198','#DC322F'];
+// Donut / categorical palette — a full accent set (orange, blue, green,
+// purple, red, amber, teal, pink) rather than a saturated rainbow.
+const MODEL_COLORS = ['#D97757','#0969DA','#1A7F37','#8250DF','#CF222E','#B08800','#1B7C83','#BF3989'];
 
 // Subagent type swatches (table tag tint), matching the palette.
 const AGENT_TYPE_COLORS = {
-  'general-purpose':   '#268BD2',
-  'Explore':           '#6C71C4',
-  'Plan':              '#B58900',
-  'claude-code-guide': '#2AA198',
-  'auto-compact':      '#657B83',
-  'unknown':           '#93A1A1',
+  'general-purpose':   '#0969DA',
+  'Explore':           '#8250DF',
+  'Plan':              '#B08800',
+  'claude-code-guide': '#1B7C83',
+  'auto-compact':      '#8C959F',
+  'unknown':           '#656D76',
 };
-function colorForAgentType(t) { return AGENT_TYPE_COLORS[t] || '#859900'; }
+function colorForAgentType(t) { return AGENT_TYPE_COLORS[t] || '#1A7F37'; }
 
 // Per-model-family swatches for the daily spend chart — subagent series reuse
 // the same family color, darkened, so "Opus" and "Opus Subagent" read as a
 // matched pair rather than two unrelated colors.
 const SPEND_FAMILY_COLORS = {
-  fable: '#D33682', mythos: '#D33682',
-  opus: '#CB4B16', sonnet: '#268BD2', haiku: '#859900',
+  fable: '#BF3989', mythos: '#BF3989',
+  opus: '#D97757', sonnet: '#0969DA', haiku: '#1A7F37',
 };
 function spendBaseColor(model) {
   const ml = (model || '').toLowerCase();
   for (const k of Object.keys(SPEND_FAMILY_COLORS)) {
     if (ml.includes(k)) return SPEND_FAMILY_COLORS[k];
   }
-  return '#6C71C4';
+  return '#8250DF';
 }
 function darkenHex(hex, amt) {
   const n = parseInt(hex.slice(1), 16);
