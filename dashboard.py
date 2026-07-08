@@ -954,16 +954,22 @@ Chart.defaults.plugins.tooltip.callbacks.labelColor = (ctx) => {
 
 // Legend visibility must survive repaints (filter changes, auto-refresh, sort) —
 // the charts are destroyed and rebuilt each render, which otherwise resets any
-// series the user toggled off. We track hidden series by label per chart and
+// series the user isolated. We track hidden series by label per chart and
 // reapply on rebuild: dataset charts via `dataset.hidden`, the doughnut via
 // per-slice data visibility (see applyModelHidden).
 const hiddenSeries = { daily: new Set(), dailyCost: new Set(), dailyProject: new Set(), dailyProjectModel: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
-function legendToggle(key) {
+// Clicking a legend item isolates that series (hides every other dataset),
+// mirroring Grafana. Clicking the already-isolated series again restores all.
+function legendIsolate(key) {
   return (e, item, legend) => {
     const ci = legend.chart;
-    const ds = ci.data.datasets[item.datasetIndex];
-    ds.hidden = !ds.hidden;
-    if (ds.hidden) hiddenSeries[key].add(ds.label); else hiddenSeries[key].delete(ds.label);
+    const datasets = ci.data.datasets;
+    const idx = item.datasetIndex;
+    const alreadyIsolated = datasets.every((d, i) => (i === idx) === !d.hidden);
+    datasets.forEach((d, i) => {
+      d.hidden = alreadyIsolated ? false : i !== idx;
+      if (d.hidden) hiddenSeries[key].add(d.label); else hiddenSeries[key].delete(d.label);
+    });
     ci.update();
   };
 }
@@ -1821,8 +1827,8 @@ function renderSpendDailyChart(proj, cfg) {
 // Chart.js's built-in legend renders one row/column with no way to split
 // items toward the axis each belongs to, so this draws two independent
 // legend groups instead: left-axis (bar) series above the left axis, the
-// right-axis (line) series above the right axis. Clicking an item toggles
-// that dataset's visibility, mirroring legendToggle()'s behavior.
+// right-axis (line) series above the right axis. Clicking an item isolates
+// that dataset, mirroring legendIsolate()'s behavior.
 function renderSpendLegend(datasets) {
   const leftEl = document.getElementById('spend-legend-left');
   const rightEl = document.getElementById('spend-legend-right');
@@ -1844,12 +1850,14 @@ function renderSpendLegend(datasets) {
   const onClick = (e) => {
     const item = e.target.closest('.spend-legend-item');
     if (!item || !charts.spendDaily) return;
-    const ds = charts.spendDaily.data.datasets[Number(item.dataset.index)];
-    const nowHidden = !ds.hidden;
-    ds.hidden = nowHidden;
-    if (nowHidden) hiddenSeries.spendDaily.add(ds.label); else hiddenSeries.spendDaily.delete(ds.label);
+    const idx = Number(item.dataset.index);
+    const alreadyIsolated = datasets.every((d, i) => (i === idx) === !d.hidden);
+    datasets.forEach((d, i) => {
+      d.hidden = alreadyIsolated ? false : i !== idx;
+      if (d.hidden) hiddenSeries.spendDaily.add(d.label); else hiddenSeries.spendDaily.delete(d.label);
+    });
     charts.spendDaily.update();
-    item.classList.toggle('hidden', nowHidden);
+    renderSpendLegend(datasets);
   };
   leftEl.onclick = onClick;
   rightEl.onclick = onClick;
@@ -1980,7 +1988,7 @@ function renderHourlyChart(agg) {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { onClick: legendToggle('hourly'), labels: { color: C.axis, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
+        legend: { onClick: legendIsolate('hourly'), labels: { color: C.axis, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
         tooltip: {
           usePointStyle: true,
           callbacks: {
@@ -2025,7 +2033,7 @@ function renderDailyChart(daily) {
     },
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
-      plugins: { legend: { onClick: legendToggle('daily'), labels: { color: C.axis, boxWidth: 12 } } },
+      plugins: { legend: { onClick: legendIsolate('daily'), labels: { color: C.axis, boxWidth: 12 } } },
       scales: {
         x: { ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
         y:  { position: 'left',  ticks: { color: C.green, callback: v => fmt(v) }, grid: { color: C.border }, title: { display: true, text: 'Cache', color: C.green } },
@@ -2058,7 +2066,7 @@ function renderDailyCostChart(days, series) {
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       plugins: {
-        legend: { onClick: legendToggle('dailyCost'), labels: { color: C.axis, boxWidth: 12 } },
+        legend: { onClick: legendIsolate('dailyCost'), labels: { color: C.axis, boxWidth: 12 } },
         tooltip: { callbacks: {
           label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
           footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
@@ -2092,7 +2100,7 @@ function renderProjectSpendChart(days, series) {
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       plugins: {
-        legend: { onClick: legendToggle('dailyProject'), labels: { color: C.axis, boxWidth: 12 } },
+        legend: { onClick: legendIsolate('dailyProject'), labels: { color: C.axis, boxWidth: 12 } },
         tooltip: { callbacks: {
           label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
           footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
@@ -2126,7 +2134,7 @@ function renderProjectModelSpendChart(days, series) {
     options: {
       responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       plugins: {
-        legend: { onClick: legendToggle('dailyProjectModel'), labels: { color: C.axis, boxWidth: 12, font: { size: 10 } } },
+        legend: { onClick: legendIsolate('dailyProjectModel'), labels: { color: C.axis, boxWidth: 12, font: { size: 10 } } },
         tooltip: { callbacks: {
           label: ctx => ` ${ctx.dataset.label}: ${fmtCost(ctx.raw)}`,
           footer: items => ` Total: ${fmtCost(items.reduce((s, it) => s + it.raw, 0))}`,
@@ -2158,9 +2166,14 @@ function renderModelChart(byModel) {
           labels: { color: C.axis, boxWidth: 12, font: { size: 11 } },
           onClick: (e, item, legend) => {
             const ci = legend.chart;
-            ci.toggleDataVisibility(item.index);
-            const label = ci.data.labels[item.index];
-            if (!ci.getDataVisibility(item.index)) hiddenSeries.model.add(label); else hiddenSeries.model.delete(label);
+            const idx = item.index;
+            const labels = ci.data.labels;
+            const alreadyIsolated = labels.every((_, i) => (i === idx) === ci.getDataVisibility(i));
+            labels.forEach((label, i) => {
+              const shouldShow = alreadyIsolated ? true : i === idx;
+              if (ci.getDataVisibility(i) !== shouldShow) ci.toggleDataVisibility(i);
+              if (shouldShow) hiddenSeries.model.delete(label); else hiddenSeries.model.add(label);
+            });
             ci.update();
           },
         },
@@ -2191,7 +2204,7 @@ function renderProjectChart(byProject) {
     },
     options: {
       indexAxis: 'y', responsive: true, maintainAspectRatio: false, resizeDelay: 150,
-      plugins: { legend: { onClick: legendToggle('project'), labels: { color: C.axis, boxWidth: 12 } } },
+      plugins: { legend: { onClick: legendIsolate('project'), labels: { color: C.axis, boxWidth: 12 } } },
       scales: {
         x: { ticks: { color: C.axis, callback: v => fmt(v) }, grid: { color: C.border } },
         y: { ticks: { color: C.axis, font: { size: 11 } }, grid: { color: C.border } },
@@ -2218,7 +2231,7 @@ function renderSubagentChart(byType) {
     options: {
       indexAxis: 'y', responsive: true, maintainAspectRatio: false, resizeDelay: 150,
       plugins: {
-        legend: { onClick: legendToggle('subagent'), labels: { color: C.axis, boxWidth: 12 } },
+        legend: { onClick: legendIsolate('subagent'), labels: { color: C.axis, boxWidth: 12 } },
         tooltip: { callbacks: {
           label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`,
           footer: items => {
