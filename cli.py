@@ -413,7 +413,7 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False, sur
     # keeps running, so a long-lived process (e.g. a systemd service) doesn't
     # silently drift behind transcripts written after it started. 0 disables
     # periodic rescanning and only scans once at startup.
-    rescan_interval = int(os.environ.get("RESCAN_INTERVAL", "300"))
+    rescan_interval = int(os.environ.get("RESCAN_INTERVAL", "30"))
 
     # Bind and serve the port *first*, then scan in the background. A cold scan
     # over a large ~/.claude/projects backlog can take well over a minute, and
