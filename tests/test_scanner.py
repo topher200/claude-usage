@@ -10,8 +10,39 @@ from pathlib import Path
 from scanner import (
     get_db, init_db, project_name_from_cwd, parse_jsonl_file,
     aggregate_sessions, upsert_sessions, insert_turns, scan,
-    _backfill_topics, _meta_get, _meta_set,
+    _backfill_topics, _meta_get, _meta_set, extra_projects_dirs,
 )
+
+
+class TestExtraProjectsDirs(unittest.TestCase):
+    def setUp(self):
+        self._saved = os.environ.get("CLAUDE_USAGE_EXTRA_DIRS")
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("CLAUDE_USAGE_EXTRA_DIRS", None)
+        else:
+            os.environ["CLAUDE_USAGE_EXTRA_DIRS"] = self._saved
+
+    def test_unset_is_empty(self):
+        os.environ.pop("CLAUDE_USAGE_EXTRA_DIRS", None)
+        self.assertEqual(extra_projects_dirs(), [])
+
+    def test_single_dir(self):
+        os.environ["CLAUDE_USAGE_EXTRA_DIRS"] = "/data/other-laptop/projects"
+        self.assertEqual(extra_projects_dirs(), [Path("/data/other-laptop/projects")])
+
+    def test_multiple_dirs_pathsep(self):
+        os.environ["CLAUDE_USAGE_EXTRA_DIRS"] = os.pathsep.join(["/a/projects", "/b/projects"])
+        self.assertEqual(extra_projects_dirs(), [Path("/a/projects"), Path("/b/projects")])
+
+    def test_blank_and_whitespace_entries_ignored(self):
+        os.environ["CLAUDE_USAGE_EXTRA_DIRS"] = os.pathsep.join(["", "  /a/projects  ", ""])
+        self.assertEqual(extra_projects_dirs(), [Path("/a/projects")])
+
+    def test_tilde_expanded(self):
+        os.environ["CLAUDE_USAGE_EXTRA_DIRS"] = "~/other/projects"
+        self.assertEqual(extra_projects_dirs(), [Path.home() / "other" / "projects"])
 
 
 class TestProjectNameFromCwd(unittest.TestCase):

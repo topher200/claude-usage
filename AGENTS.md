@@ -46,7 +46,7 @@ CI ([.github/workflows/tests.yml](.github/workflows/tests.yml)) runs the suite o
                   cli.py queries   ←──────────→   dashboard.py /api/data
 ```
 
-By default the scanner walks both `~/.claude/projects/` and the Xcode coding-assistant directory; missing dirs are silently skipped. Override with `--projects-dir`.
+By default the scanner walks both `~/.claude/projects/` and the Xcode coding-assistant directory; missing dirs are silently skipped. Override with `--projects-dir`. Set `CLAUDE_USAGE_EXTRA_DIRS` (os.pathsep-separated) to *append* extra roots — e.g. transcripts copied from another machine — which fold into the same DB, deduped by `message.id`.
 
 ### SQLite schema (created/migrated in [scanner.py](scanner.py) `init_db`)
 
