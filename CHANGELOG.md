@@ -4,14 +4,21 @@
 
 ### Scanner
 
+- New **`api_spend`** table stores authoritative per-day, per-model-tier spend pulled from the claude.ai usage API (cost in minor units plus the input/output/cache-read/cache-write-5m/cache-write-1h token breakdown and request count). This is the ground truth the locally-scanned `turns` are reconciled against; refetching a day replaces its rows so a still-accruing day settles to its final total.
 - New **`CLAUDE_USAGE_EXTRA_DIRS`** env var (os.pathsep-separated) adds transcript roots beyond `~/.claude/projects/` so usage copied from other machines folds into the same database. Overlap is deduped by `message.id`, so re-scanning a copy that shares sessions never double-counts; a missing/cleared path (e.g. a `/tmp` copy gone after reboot) is silently skipped and already-imported turns persist. Multi-machine spend then appears in the normal model/project/cost views with no separate bucketing.
 - Cost now bills **1-hour cache writes at 2x input** instead of the 5-minute 1.25x rate. Claude Code splits cache-creation tokens into 5m and 1h TTL buckets under `usage.cache_creation`; the scanner records the 1h portion (`cache_creation_1h_tokens` on `turns`, `total_cache_creation_1h` on `sessions`) so each is priced correctly. Heavy Claude Code sessions are dominated by 1h cache, so this materially raises estimated cost. Existing databases need a full rescan (dashboard **Rescan** button, or delete `~/.claude/usage.db` and re-scan) to backfill the split for already-processed transcripts.
 
 ### Dashboard
 
+- New **Reconciliation** panel compares claude.ai's authoritative spend against this machine's locally-scanned cost per day and per model tier, and splits the gap into a **coverage** component (tokens billed but never seen in local transcripts, valued at our prices) and a **pricing** component (identical token counts priced differently). The panel appears only once claude.ai data has been fetched.
+- The manual "reported spend" entry is retired. The Monthly Spend Limit's non-tracked spend is now derived directly from the claude.ai gap (billed cost above local cost per day) instead of a hand-typed monthly total smeared across days; the series is relabeled **claude.ai gap (unseen locally)**.
 - Estimated cost across all tables and charts reflects the 5m/1h cache-write split (`calcCost` now takes the 1h portion; the CLI/dashboard `PRICING` tables gain a `cache_write_1h` rate). The pricing-parity test now checks the cache-write rates too, not just input/output.
 - The dashboard process now re-scans `~/.claude/projects/` every 30 seconds while it keeps running (configurable via `RESCAN_INTERVAL`, in seconds; `0` disables it), not just once at startup. A long-lived instance — e.g. a systemd service — previously only ever showed usage from the moment it was launched, silently drifting behind newer transcripts the longer it stayed up. An incremental scan is a cheap mtime check per file, so polling this often costs well under 1% of a CPU core even on a large history.
-- Added a **Sonnet 5 rate** toggle to the filter bar that reprices Sonnet 5 turns between the introductory `$2/$10` per-Mtok rate (default, in effect through 2026-08-31) and the standard `$3/$15`. Enterprise/standard billing may charge the standard rate during the intro window, so the toggle lets local totals be reconciled against what's actually billed; the extra spend reflows to the exact days Sonnet was used and the difference is absorbed by the Non-tracked series in Monthly Spend Limit. The choice persists in `localStorage`.
+- Added a **Sonnet 5 rate** toggle to the filter bar that reprices Sonnet 5 turns between the introductory `$2/$10` per-Mtok rate (default, in effect through 2026-08-31) and the standard `$3/$15`. Enterprise/standard billing may charge the standard rate during the intro window, so the toggle lets local totals be reconciled against what's actually billed; the extra spend reflows to the exact days Sonnet was used. The choice persists in `localStorage`.
+
+### CLI
+
+- New **`fetch-spend`** command (`python cli.py fetch-spend [--start YYYY-MM-DD] [--end YYYY-MM-DD]`, default this month) pulls authoritative spend from the claude.ai usage API into the `api_spend` table via the new `spend_api.py` module. Credentials resolve from `CLAUDE_AI_ORG_ID` + `CLAUDE_AI_COOKIE` env vars or `~/.claude/claude-usage/credentials.json` and are never committed or logged; the durable `sessionKey` cookie alone authenticates, and an expired one surfaces a clear refresh prompt.
 
 ## v1.5.4 — 2026-07-01
 
