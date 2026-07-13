@@ -118,6 +118,24 @@ def init_db(conn):
             value TEXT
         );
 
+        -- Authoritative per-day spend pulled from the claude.ai usage API, the
+        -- ground truth the locally-scanned `turns` are reconciled against. One
+        -- row per (day, grouping, group_key); refetching a day replaces it.
+        CREATE TABLE IF NOT EXISTS api_spend (
+            day              TEXT,
+            group_by         TEXT,
+            group_key        TEXT,
+            cost_minor_units INTEGER DEFAULT 0,
+            input            INTEGER DEFAULT 0,
+            output           INTEGER DEFAULT 0,
+            cache_read       INTEGER DEFAULT 0,
+            cache_write_5m   INTEGER DEFAULT 0,
+            cache_write_1h   INTEGER DEFAULT 0,
+            request_count    INTEGER DEFAULT 0,
+            fetched_at       TEXT,
+            PRIMARY KEY (day, group_by, group_key)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id);
         CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp);
         CREATE INDEX IF NOT EXISTS idx_sessions_first ON sessions(first_timestamp);
@@ -613,6 +631,27 @@ def insert_turns(conn, turns):
          t.get("is_subagent", 0), t.get("agent_id"))
         for t in turns
     ])
+
+
+def store_api_spend(conn, series, group_by, fetched_at):
+    """Upsert claude.ai usage-API rows into `api_spend`.
+
+    `series` is the API response's `series` list. Refetching a day replaces its
+    rows so a still-accruing day settles to its final total on the next pull.
+    """
+    conn.executemany("""
+        INSERT OR REPLACE INTO api_spend
+            (day, group_by, group_key, cost_minor_units, input, output,
+             cache_read, cache_write_5m, cache_write_1h, request_count, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        (s["bucket"], group_by, s["group_key"], s.get("cost_minor_units", 0),
+         s["tokens"].get("input", 0), s["tokens"].get("output", 0),
+         s["tokens"].get("cache_read", 0), s["tokens"].get("cache_write_5m", 0),
+         s["tokens"].get("cache_write_1h", 0), s.get("request_count", 0), fetched_at)
+        for s in series
+    ])
+    conn.commit()
 
 
 def scan(projects_dir=None, projects_dirs=None, db_path=DB_PATH, verbose=True):
