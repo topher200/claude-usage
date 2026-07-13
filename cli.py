@@ -437,6 +437,28 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False, sur
 
     threading.Thread(target=background_scan, daemon=True).start()
 
+    # Refresh authoritative claude.ai spend on a slow cadence (default daily; 0
+    # disables) so a long-lived instance keeps the reconciliation current on its
+    # own. Sleep-first — never fetch at startup — so the test suite (which drives
+    # cmd_dashboard) can't trigger a network call, and a still-valid sessionKey
+    # persisted in the DB keeps the panel populated across restarts regardless.
+    spend_interval = int(os.environ.get("SPEND_FETCH_INTERVAL", "86400"))
+
+    def background_spend():
+        import spend_api
+        delay = min(spend_interval, 20)  # first fetch soon, but after any test run ends
+        while True:
+            time.sleep(delay)
+            delay = spend_interval
+            if spend_api.has_credentials():
+                try:
+                    spend_api.refresh_spend(db_path=DB_PATH)
+                except Exception:
+                    pass
+
+    if spend_interval > 0:
+        threading.Thread(target=background_spend, daemon=True).start()
+
     # Open a browser for users running this as a script (see README). The VS Code
     # extension passes --no-browser since it embeds the dashboard in a webview.
     if not no_browser:
@@ -457,45 +479,52 @@ def cmd_fetch_spend(start=None, end=None):
     Defaults to the current month through today. Credentials come from
     spend_api (env CLAUDE_AI_ORG_ID/COOKIE, or ~/.claude/claude-usage/credentials.json).
     """
-    import scanner
     import spend_api
 
-    today = date.today()
-    if not start:
-        start = today.replace(day=1).isoformat()
-    if not end:
-        end = today.isoformat()
-
-    if not spend_api.has_credentials():
+    res = spend_api.refresh_spend(db_path=DB_PATH, start=start, end=end)
+    status = res.get("status")
+    if status == "ok":
+        print(f"Fetched claude.ai spend {res['start']}..{res['end']}: {res['message']}.")
+        return
+    if status == "no_credentials":
         print("No claude.ai credentials found.")
-        print("Set CLAUDE_AI_ORG_ID + CLAUDE_AI_COOKIE, or write")
+        print("Run:  python cli.py set-session-key   (paste your sessionKey or a 'copy as cURL' blob)")
+        print("or set CLAUDE_AI_ORG_ID + CLAUDE_AI_COOKIE, or write")
         print(f"  {spend_api.CREDENTIALS_PATH}")
         print('  {"org_id": "<org-uuid>", "cookie": "sessionKey=sk-ant-sid02-..."}')
-        print("The sessionKey cookie alone is enough; copy it from a logged-in claude.ai session.")
-        sys.exit(1)
+    elif status == "auth_failed":
+        print(f"Auth failed: {res['message']}")
+        print("Your sessionKey has expired. Run:  python cli.py set-session-key")
+    else:
+        print(f"Fetch failed ({status}): {res['message']}")
+    sys.exit(1)
 
-    try:
-        data = spend_api.fetch_spend(start, end, group_by="model_tier")
-    except spend_api.AuthError as e:
-        print(f"Auth failed: {e}")
-        print("Your sessionKey has likely expired. Copy a fresh one from claude.ai and update your credentials.")
-        sys.exit(1)
-    except spend_api.RateLimitError as e:
-        print(f"Rate limited: {e}")
-        sys.exit(1)
-    except spend_api.SpendApiError as e:
-        print(f"Fetch failed: {e}")
-        sys.exit(1)
 
-    conn = scanner.get_db()
-    scanner.init_db(conn)
-    fetched_at = datetime.now().isoformat(timespec="seconds")
-    scanner.store_api_spend(conn, data["series"], "model_tier", fetched_at)
-    total = sum(s["cost_minor_units"] for s in data["series"]) / 100
-    days = len({s["bucket"] for s in data["series"]})
-    conn.close()
-    print(f"Fetched claude.ai spend {start}..{end}: {days} days, "
-          f"{len(data['series'])} rows, ${total:,.2f} total.")
+def cmd_set_session_key(value=None):
+    """Store a claude.ai sessionKey (from a raw key, a cookie string, or a full
+    'copy as cURL' paste) and validate it with an immediate fetch."""
+    import spend_api
+
+    text = value
+    if not text:
+        print("Paste your sessionKey or a full 'copy as cURL' request, then press Ctrl-D:")
+        text = sys.stdin.read()
+    parsed = spend_api.parse_credentials_input(text)
+    if not parsed["session_key"]:
+        print("Could not find a sessionKey in that input (expected 'sk-ant-sid...').")
+        sys.exit(1)
+    org = spend_api.save_credentials(parsed["session_key"], parsed["org_id"])
+    print(f"Saved sessionKey {spend_api.mask_key(parsed['session_key'])}"
+          + (f" (org {org})." if org else "."))
+    if not org:
+        print("No org id on file yet. Paste a 'copy as cURL' blob (its URL carries the org id), "
+              "or add org_id to the credentials file.")
+        return
+    res = spend_api.refresh_spend(db_path=DB_PATH)
+    if res.get("status") == "ok":
+        print(f"Verified: fetched {res['message']}.")
+    else:
+        print(f"Key saved but the test fetch failed ({res.get('status')}): {res.get('message')}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -510,6 +539,8 @@ Usage:
   python cli.py stats                        Show all-time statistics
   python cli.py fetch-spend [--start YYYY-MM-DD] [--end YYYY-MM-DD]
                                                  Pull authoritative spend from claude.ai (defaults to this month)
+  python cli.py set-session-key ["<sessionKey or curl blob>"]
+                                                 Store/refresh the claude.ai sessionKey (reads stdin if no arg)
   python cli.py dashboard [--projects-dir PATH] [--host HOST] [--port PORT] [--no-browser] [--surface SURFACE]
                                                  Scan + start dashboard (opens a browser unless --no-browser)
   python cli.py --version                    Print the version and exit
@@ -522,6 +553,7 @@ COMMANDS = {
     "stats": cmd_stats,
     "dashboard": cmd_dashboard,
     "fetch-spend": cmd_fetch_spend,
+    "set-session-key": cmd_set_session_key,
 }
 
 def parse_named_arg(args, flag):
@@ -557,6 +589,8 @@ def main():
         cmd_scan(projects_dir=projects_dir)
     elif command == "fetch-spend":
         cmd_fetch_spend(start=parse_named_arg(rest, "--start"), end=parse_named_arg(rest, "--end"))
+    elif command == "set-session-key":
+        cmd_set_session_key(value=rest[0] if rest else None)
     else:
         COMMANDS[command]()
 

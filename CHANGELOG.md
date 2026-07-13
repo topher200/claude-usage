@@ -11,6 +11,7 @@
 ### Dashboard
 
 - New **Reconciliation** panel compares claude.ai's authoritative spend against this machine's locally-scanned cost per day and per model tier, and splits the gap into a **coverage** component (tokens billed but never seen in local transcripts, valued at our prices) and a **pricing** component (identical token counts priced differently). The panel appears only once claude.ai data has been fetched.
+- The Reconciliation panel flags stale/expired data: an expired sessionKey shows a red banner, a transient fetch failure shows amber, and data older than ~a day is marked stale. A built-in **Update sessionKey** field takes a raw key or a whole "copy as cURL" paste, stores it, and re-fetches on the spot. A long-lived dashboard also refreshes claude.ai spend on its own about daily (`SPEND_FETCH_INTERVAL` seconds; `0` disables).
 - The manual "reported spend" entry is retired. The Monthly Spend Limit's non-tracked spend is now derived directly from the claude.ai gap (billed cost above local cost per day) instead of a hand-typed monthly total smeared across days; the series is relabeled **claude.ai gap (unseen locally)**.
 - Estimated cost across all tables and charts reflects the 5m/1h cache-write split (`calcCost` now takes the 1h portion; the CLI/dashboard `PRICING` tables gain a `cache_write_1h` rate). The pricing-parity test now checks the cache-write rates too, not just input/output.
 - The dashboard process now re-scans `~/.claude/projects/` every 30 seconds while it keeps running (configurable via `RESCAN_INTERVAL`, in seconds; `0` disables it), not just once at startup. A long-lived instance — e.g. a systemd service — previously only ever showed usage from the moment it was launched, silently drifting behind newer transcripts the longer it stayed up. An incremental scan is a cheap mtime check per file, so polling this often costs well under 1% of a CPU core even on a large history.
@@ -19,6 +20,7 @@
 ### CLI
 
 - New **`fetch-spend`** command (`python cli.py fetch-spend [--start YYYY-MM-DD] [--end YYYY-MM-DD]`, default this month) pulls authoritative spend from the claude.ai usage API into the `api_spend` table via the new `spend_api.py` module. Credentials resolve from `CLAUDE_AI_ORG_ID` + `CLAUDE_AI_COOKIE` env vars or `~/.claude/claude-usage/credentials.json` and are never committed or logged; the durable `sessionKey` cookie alone authenticates, and an expired one surfaces a clear refresh prompt.
+- New **`set-session-key`** command stores/refreshes the claude.ai sessionKey from a raw key, a cookie string, or a whole "copy as cURL" paste (it extracts the key and org id), then validates it with an immediate fetch.
 
 ## v1.5.4 — 2026-07-01
 
