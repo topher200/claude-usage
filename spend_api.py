@@ -18,6 +18,7 @@ prompting for a fresh cookie.
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -121,6 +122,101 @@ def tier_family(group_key):
     if "haiku" in k:
         return "haiku"
     return "other"
+
+
+# Pull sessionKey / org id out of a raw key, a "sessionKey=…" cookie string, or
+# a whole "copy as cURL" blob — whatever the user finds easiest to paste.
+_SESSION_KEY_RE = re.compile(r"sessionKey=([^;\s\"']+)")
+_RAW_KEY_RE = re.compile(r"(sk-ant-sid\S+)")
+_ORG_RE = re.compile(r"organizations/([0-9a-fA-F-]{36})")
+
+
+def parse_credentials_input(text):
+    """Return {"session_key", "org_id"} extracted from arbitrary pasted text.
+    Either field is None if not found."""
+    text = (text or "").strip()
+    m = _SESSION_KEY_RE.search(text)
+    key = m.group(1) if m else None
+    if not key:
+        m = _RAW_KEY_RE.search(text)
+        key = m.group(1).rstrip("\";',") if m else None
+    m = _ORG_RE.search(text)
+    return {"session_key": key, "org_id": m.group(1) if m else None}
+
+
+def save_credentials(session_key, org_id=None):
+    """Write the sessionKey (and org id, if given/known) to the credentials
+    file. sessionKey alone authenticates, so that's all the cookie needs.
+    Returns the org id now on file."""
+    CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if CREDENTIALS_PATH.exists():
+        try:
+            data = json.loads(CREDENTIALS_PATH.read_text())
+        except ValueError:
+            data = {}
+    if org_id:
+        data["org_id"] = org_id
+    data["cookie"] = "sessionKey=" + session_key
+    CREDENTIALS_PATH.write_text(json.dumps(data, indent=2) + "\n")
+    return data.get("org_id")
+
+
+def mask_key(session_key):
+    return ("…" + session_key[-6:]) if session_key else "(none)"
+
+
+def refresh_spend(db_path=None, start=None, end=None, group_by="model_tier"):
+    """Fetch spend and upsert it into `api_spend`, recording the attempt's
+    outcome in schema_meta so the dashboard can show staleness/expiry.
+
+    Never raises for the expected failure modes; returns a status dict with
+    `status` one of: ok, no_credentials, auth_failed, rate_limited,
+    network_error.
+    """
+    import scanner
+    from datetime import date, datetime
+
+    today = date.today()
+    start = start or today.replace(day=1).isoformat()
+    end = end or today.isoformat()
+    attempt_at = datetime.now().isoformat(timespec="seconds")
+
+    if not has_credentials():
+        return {"status": "no_credentials", "attempt_at": attempt_at,
+                "message": "No claude.ai credentials set."}
+
+    def record(status, error=""):
+        try:
+            conn = scanner.get_db(db_path) if db_path else scanner.get_db()
+            scanner.init_db(conn)
+            scanner.record_api_fetch(conn, attempt_at, status, error)
+            conn.close()
+        except Exception:
+            pass
+
+    try:
+        data = fetch_spend(start, end, group_by=group_by)
+    except AuthError as e:
+        record("auth_failed", str(e))
+        return {"status": "auth_failed", "attempt_at": attempt_at, "message": str(e)}
+    except RateLimitError as e:
+        record("rate_limited", str(e))
+        return {"status": "rate_limited", "attempt_at": attempt_at, "message": str(e)}
+    except SpendApiError as e:
+        record("network_error", str(e))
+        return {"status": "network_error", "attempt_at": attempt_at, "message": str(e)}
+
+    conn = scanner.get_db(db_path) if db_path else scanner.get_db()
+    scanner.init_db(conn)
+    scanner.store_api_spend(conn, data["series"], group_by, attempt_at)
+    scanner.record_api_fetch(conn, attempt_at, "ok", "")
+    conn.close()
+    total = sum(s["cost_minor_units"] for s in data["series"]) / 100
+    days = len({s["bucket"] for s in data["series"]})
+    return {"status": "ok", "attempt_at": attempt_at, "total": total, "days": days,
+            "rows": len(data["series"]), "start": start, "end": end,
+            "message": f"{days} days, ${total:,.2f} total"}
 
 
 if __name__ == "__main__":

@@ -633,6 +633,16 @@ def insert_turns(conn, turns):
     ])
 
 
+def record_api_fetch(conn, attempt_at, status, error=""):
+    """Persist the outcome of the most recent claude.ai spend fetch so the
+    dashboard can flag stale data or an expired sessionKey. `status` is one of
+    ok / auth_failed / rate_limited / network_error."""
+    _meta_set(conn, "api_spend_last_attempt", attempt_at)
+    _meta_set(conn, "api_spend_last_status", status)
+    _meta_set(conn, "api_spend_last_error", error or "")
+    conn.commit()
+
+
 def store_api_spend(conn, series, group_by, fetched_at):
     """Upsert claude.ai usage-API rows into `api_spend`.
 
