@@ -98,9 +98,9 @@ def require_db():
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
-def cmd_scan(projects_dir=None):
+def cmd_scan(projects_dir=None, verbose=True):
     from scanner import scan
-    scan(projects_dir=Path(projects_dir) if projects_dir else None)
+    scan(projects_dir=Path(projects_dir) if projects_dir else None, verbose=verbose)
 
 
 def cmd_today():
@@ -409,6 +409,11 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False, sur
 
     host = host or os.environ.get("HOST", "localhost")
     port = int(port or os.environ.get("PORT", "8080"))
+    # How often (seconds) to re-scan ~/.claude/projects while the dashboard
+    # keeps running, so a long-lived process (e.g. a systemd service) doesn't
+    # silently drift behind transcripts written after it started. 0 disables
+    # periodic rescanning and only scans once at startup.
+    rescan_interval = int(os.environ.get("RESCAN_INTERVAL", "300"))
 
     # Bind and serve the port *first*, then scan in the background. A cold scan
     # over a large ~/.claude/projects backlog can take well over a minute, and
@@ -426,6 +431,9 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False, sur
         print("Scanning in the background...")
         scan(projects_dir=projects_dir)
         print("Background scan complete.")
+        while rescan_interval > 0:
+            time.sleep(rescan_interval)
+            scan(projects_dir=projects_dir, verbose=False)
 
     threading.Thread(target=background_scan, daemon=True).start()
 

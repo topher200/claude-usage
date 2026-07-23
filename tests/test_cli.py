@@ -1,6 +1,8 @@
 """Tests for cli.py - pricing, formatting, and cost calculation."""
 
 import io
+import os
+import time
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -240,6 +242,34 @@ class TestDashboardNoBrowser(unittest.TestCase):
             cli.cmd_dashboard(host="127.0.0.1", port=9999, no_browser=True)
             mock_open.assert_not_called()
             mock_serve.assert_called_once()
+
+
+class TestDashboardPeriodicRescan(unittest.TestCase):
+    """A long-lived dashboard process (e.g. a systemd service) must keep
+    re-scanning transcripts, not just once at startup — see RESCAN_INTERVAL."""
+
+    def test_disabled_by_zero_interval(self):
+        with mock.patch.object(cli, "cmd_scan") as mock_scan, \
+             mock.patch("dashboard.serve"), \
+             mock.patch.dict(os.environ, {"RESCAN_INTERVAL": "0"}), \
+             redirect_stdout(io.StringIO()):
+            cli.cmd_dashboard(host="127.0.0.1", port=9999, no_browser=True)
+            time.sleep(0.2)
+            self.assertEqual(mock_scan.call_count, 1)
+
+    def test_positive_interval_reschedules_silently(self):
+        with mock.patch.object(cli, "cmd_scan") as mock_scan, \
+             mock.patch("dashboard.serve"), \
+             mock.patch.dict(os.environ, {"RESCAN_INTERVAL": "1"}), \
+             redirect_stdout(io.StringIO()):
+            cli.cmd_dashboard(host="127.0.0.1", port=9999, no_browser=True)
+            deadline = time.time() + 3
+            while mock_scan.call_count < 2 and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertGreaterEqual(mock_scan.call_count, 2)
+            # Periodic scans stay quiet; only the initial startup scan is verbose.
+            _, kwargs = mock_scan.call_args
+            self.assertEqual(kwargs.get("verbose"), False)
 
 
 if __name__ == "__main__":
