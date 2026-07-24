@@ -9,7 +9,7 @@
 ### Dashboard
 
 - Estimated cost across all tables and charts reflects the 5m/1h cache-write split (`calcCost` now takes the 1h portion; the CLI/dashboard `PRICING` tables gain a `cache_write_1h` rate). The pricing-parity test now checks the cache-write rates too, not just input/output.
-- The dashboard process now re-scans `~/.claude/projects/` every 5 minutes while it keeps running (configurable via `RESCAN_INTERVAL`, in seconds; `0` disables it), not just once at startup. A long-lived instance — e.g. a systemd service — previously only ever showed usage from the moment it was launched, silently drifting behind newer transcripts the longer it stayed up.
+- The dashboard process now re-scans `~/.claude/projects/` every 30 seconds while it keeps running (configurable via `RESCAN_INTERVAL`, in seconds; `0` disables it), not just once at startup. A long-lived instance — e.g. a systemd service — previously only ever showed usage from the moment it was launched, silently drifting behind newer transcripts the longer it stayed up. An incremental scan is a cheap mtime check per file, so polling this often costs well under 1% of a CPU core even on a large history.
 
 ## v1.5.4 — 2026-07-01
 
