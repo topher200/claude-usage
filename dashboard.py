@@ -24,6 +24,12 @@ DB_PATH = Path(os.environ.get("CLAUDE_USAGE_DB", Path.home() / ".claude" / "usag
 SURFACE = "web"
 
 
+def _has_table(conn, name):
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
 def get_dashboard_data(db_path=DB_PATH):
     if not db_path.exists():
         return {"error": "Database not found. Run: python cli.py scan"}
@@ -260,6 +266,30 @@ def get_dashboard_data(db_path=DB_PATH):
         "turns":          r["turns"] or 0,
     } for r in daily_project_rows]
 
+    # Authoritative per-day, per-tier spend from the claude.ai usage API — the
+    # ground truth the locally-scanned turns are reconciled against.
+    api_spend_rows = conn.execute("""
+        SELECT day, group_key, cost_minor_units, input, output, cache_read,
+               cache_write_5m, cache_write_1h, request_count
+        FROM api_spend
+        WHERE group_by = 'model_tier'
+        ORDER BY day, group_key
+    """).fetchall() if _has_table(conn, "api_spend") else []
+    api_spend = [{
+        "day":            r["day"],
+        "group_key":      r["group_key"],
+        "cost":           (r["cost_minor_units"] or 0) / 100,
+        "input":          r["input"] or 0,
+        "output":         r["output"] or 0,
+        "cache_read":     r["cache_read"] or 0,
+        "cache_write_5m": r["cache_write_5m"] or 0,
+        "cache_write_1h": r["cache_write_1h"] or 0,
+        "request_count":  r["request_count"] or 0,
+    } for r in api_spend_rows]
+    api_spend_fetched_at = conn.execute(
+        "SELECT MAX(fetched_at) FROM api_spend"
+    ).fetchone()[0] if _has_table(conn, "api_spend") else None
+
     conn.close()
 
     return {
@@ -270,6 +300,8 @@ def get_dashboard_data(db_path=DB_PATH):
         "sessions_all":    sessions_all,
         "subagent_by_type": subagent_by_type,
         "top_dispatches":  top_dispatches,
+        "api_spend":       api_spend,
+        "api_spend_fetched_at": api_spend_fetched_at,
         "generated_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -391,13 +423,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .spend-limit-settings label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .spend-limit-settings input { width: 220px; padding: 5px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; }
   .spend-limit-settings input:focus { outline: none; border-color: var(--accent); }
-  .spend-reports-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
-  .spend-report-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text); padding: 4px 8px; border-radius: 5px; background: var(--raised); }
-  .spend-report-row .date { color: var(--muted); min-width: 90px; }
-  .spend-report-row .amount { flex: 1; }
-  .spend-report-del { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }
-  .spend-report-del:hover { color: var(--red); }
-  .spend-reports-empty { font-size: 12px; color: var(--muted); font-style: italic; }
+  .recon-summary { display: flex; flex-wrap: wrap; gap: 22px; margin-bottom: 16px; }
+  .recon-stat { display: flex; flex-direction: column; gap: 3px; }
+  .recon-stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .recon-stat .value { font-size: 20px; font-weight: 700; font-family: monospace; }
+  .recon-chart-wrap { position: relative; height: 260px; margin-top: 18px; }
 
   .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
   /* min-width:0 lets the grid column shrink below the canvas's intrinsic
@@ -523,14 +553,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="filter-sep"></div>
   <div class="filter-label">Sonnet&nbsp;5 rate</div>
   <button class="filter-btn" id="sonnet5-rate-btn" onclick="toggleSonnet5Rate()" aria-pressed="false"
-    title="Sonnet 5 launched at an introductory $2/$10 per Mtok through 2026-08-31, reverting to $3/$15. Enterprise/standard billing may charge the standard rate during the intro window. Toggle to reprice Sonnet 5 turns; the difference reconciles against your reported total in Monthly Spend Limit.">Sonnet 5: $2 / $10 (intro)</button>
+    title="Sonnet 5 launched at an introductory $2/$10 per Mtok through 2026-08-31, reverting to $3/$15. Enterprise/standard billing may charge the standard rate during the intro window. Toggle to reprice Sonnet 5 turns; the difference surfaces against claude.ai billed spend in Reconciliation.">Sonnet 5: $2 / $10 (intro)</button>
 </div>
 
 <div class="container">
   <div class="table-card" id="sec-spend-limit" data-card="spend-limit">
     <div class="section-header">
       <div class="section-title"><span class="card-caret">&#9656;</span>Monthly Spend Limit</div>
-      <button class="export-btn" onclick="toggleSpendLimitSettings()" title="Set your monthly limit and any spend from other machines/products not tracked here">Edit</button>
+      <button class="export-btn" onclick="toggleSpendLimitSettings()" title="Set your monthly spend limit">Edit</button>
     </div>
     <div id="spend-limit-body">
       <div class="spend-limit-summary">
@@ -545,19 +575,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="spend-legend-group" id="spend-legend-right"></div>
       </div>
       <div class="spend-limit-chart-wrap"><canvas id="chart-spend-daily"></canvas></div>
-      <div class="spend-limit-caption">Projected from your last 7 days of local usage; non-tracked spend estimated from your latest report.</div>
+      <div class="spend-limit-caption">Projected from your last 7 days of local usage; claude.ai gap derived from Anthropic usage data.</div>
       <div class="spend-limit-settings" id="spend-limit-settings" style="display:none;">
         <div class="spend-limit-settings-row">
           <label>Monthly limit ($)<input type="number" id="spend-limit-input" min="0" step="1"></label>
           <button class="export-btn" onclick="saveSpendLimitAmount()">Save limit</button>
         </div>
-        <div class="spend-limit-settings-row">
-          <label>What Claude.ai shows as "spent this month" ($)<input type="number" id="spend-report-input" min="0" step="0.01" placeholder="e.g. 276.50"></label>
-          <button class="export-btn" onclick="addSpendReport()">Add report for today</button>
-        </div>
-        <div class="spend-reports-list" id="spend-reports-list"></div>
       </div>
     </div>
+  </div>
+  <div class="table-card" id="sec-reconciliation" data-card="reconciliation" style="display:none;">
+    <div class="section-title"><span class="card-caret">&#9656;</span>Reconciliation &mdash; claude.ai vs local</div>
+    <div class="recon-summary" id="recon-summary"></div>
+    <table>
+      <thead><tr>
+        <th>Tier</th><th>API $</th><th>Local $</th><th>Gap $</th><th>Coverage $</th><th>Pricing $</th>
+      </tr></thead>
+      <tbody id="recon-table-body"></tbody>
+    </table>
+    <div class="recon-chart-wrap"><canvas id="chart-recon"></canvas></div>
+    <div class="spend-limit-caption" id="recon-caption"></div>
   </div>
   <div class="charts-grid">
     <div class="chart-card wide" id="sec-daily-cost" data-card="daily-cost">
@@ -819,8 +856,8 @@ const PRICING = {
 // Sonnet 5 launched at an introductory rate ($2/$10 per Mtok) through
 // 2026-08-31, reverting to standard ($3/$15). Enterprise/standard billing may
 // charge the standard rate during the intro window, so the dashboard can price
-// Sonnet 5 either way; the difference reconciles against the reported total in
-// Monthly Spend Limit.
+// Sonnet 5 either way; the difference surfaces against claude.ai billed spend
+// in Reconciliation.
 const SONNET5_RATES = {
   intro:    { input: 2.00, output: 10.00, cache_write: 2.50, cache_write_1h: 4.00, cache_read: 0.20 },
   standard: { input: 3.00, output: 15.00, cache_write: 3.75, cache_write_1h: 6.00, cache_read: 0.30 },
@@ -981,7 +1018,7 @@ Chart.defaults.plugins.tooltip.callbacks.labelColor = (ctx) => {
 // series the user isolated. We track hidden series by label per chart and
 // reapply on rebuild: dataset charts via `dataset.hidden`, the doughnut via
 // per-slice data visibility (see applyModelHidden).
-const hiddenSeries = { daily: new Set(), dailyCost: new Set(), dailyProject: new Set(), dailyProjectModel: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set() };
+const hiddenSeries = { daily: new Set(), dailyCost: new Set(), dailyProject: new Set(), dailyProjectModel: new Set(), hourly: new Set(), project: new Set(), model: new Set(), subagent: new Set(), spendDaily: new Set(), recon: new Set() };
 // Clicking a legend item isolates that series (hides every other dataset),
 // mirroring Grafana. Clicking the already-isolated series again restores all.
 function legendIsolate(key) {
@@ -1443,15 +1480,14 @@ function applyFilter() {
     return (a.isSubagent ? 1 : 0) - (b.isSubagent ? 1 : 0);
   });
 
-  // Manually-reported non-tracked spend (see Monthly Spend Limit) is real
-  // cost that never appears in `turns`, so fold its daily bump in as its own
-  // series — otherwise this chart would silently undercount actual spend on
-  // days with a report.
+  // The claude.ai-billed spend above local cost never appears in `turns`, so
+  // fold that daily gap in as its own series -- otherwise this chart would
+  // silently undercount actual org-wide spend.
   const nonTrackedByDay = computeBumpsForRange(loadSpendCfg(), start, end);
   const hasNonTracked = Object.values(nonTrackedByDay).some(v => v);
   if (hasNonTracked) {
     Object.keys(nonTrackedByDay).forEach(d => spendDaySet.add(d));
-    spendSeries.push({ model: null, isSubagent: false, nonTracked: true, label: 'Non-tracked (reported)', byDay: nonTrackedByDay });
+    spendSeries.push({ model: null, isSubagent: false, nonTracked: true, label: 'claude.ai gap (unseen locally)', byDay: nonTrackedByDay });
   }
   const spendDays = [...spendDaySet].sort();
 
@@ -1543,6 +1579,7 @@ function applyFilter() {
 
   renderStats(totals);
   renderSpendLimit();
+  renderReconciliation(start, end);
   renderDailyChart(daily);
   renderDailyCostChart(spendDays, spendSeries);
   renderProjectSpendChart(projectSpendDays, projectSpendSeries);
@@ -1591,29 +1628,20 @@ function renderStats(t) {
 // it always reflects the current calendar month across every model, because
 // that's what a real billing limit resets against.
 //
-// This dashboard only sees Claude Code usage on this machine, so the gap
-// between that and the real org-wide total is tracked as dated "reports":
-// the user periodically types in the cumulative "spent this month" figure
-// Claude.ai shows them, stamped with the date it was reported. Each report
-// implies a "non-tracked usage" bump — whatever gap remains between the
-// reported total and (this machine's cumulative cost + bumps already
-// accounted for) so far this month. Since a report only pins down a
-// cumulative total as of its date, not which day the gap actually happened
-// on, the bump is smeared evenly across every day since the previous report
-// (or since the 1st of the month, for the first report). Bumps never move
-// once assigned, so local usage recorded after a report's date adds on top
-// of it rather than double-counting.
+// This dashboard scans Claude Code usage on this machine; the authoritative
+// org-wide total comes from the claude.ai usage API (rawData.api_spend). The
+// per-day gap between billed spend and local cost is the "claude.ai gap
+// (unseen locally)" series, added on top of local cost to reconcile against
+// the real total.
 const SPEND_CFG_KEY = 'cu_spend_limit_cfg';
-const DEFAULT_SPEND_CFG = { limit: 1500, reports: {} };
+const DEFAULT_SPEND_CFG = { limit: 1500 };
 
 function loadSpendCfg() {
   try {
     const saved = JSON.parse(localStorage.getItem(SPEND_CFG_KEY) || 'null');
-    if (saved && typeof saved.limit === 'number') {
-      return { limit: saved.limit, reports: (saved.reports && typeof saved.reports === 'object') ? saved.reports : {} };
-    }
+    if (saved && typeof saved.limit === 'number') return { limit: saved.limit };
   } catch (e) {}
-  return { limit: DEFAULT_SPEND_CFG.limit, reports: {} };
+  return { limit: DEFAULT_SPEND_CFG.limit };
 }
 
 function saveSpendCfg(cfg) {
@@ -1646,54 +1674,31 @@ function monthDayList(monthStart, monthEnd) {
   return days;
 }
 
-// Walks the month's reports in date order. Each report's cumulative "spent
-// this month" figure implies a total gap (reported total minus local cost
-// through that date minus bumps already assigned on earlier dates this
-// month), which is smeared evenly across every day from the previous
-// report's date (exclusive) through this report's date (inclusive) — or
-// from the 1st of the month for the first report.
-function computeMonthlyBumps(cfg, monthStart, monthEnd) {
-  const localByDay = dailyLocalCostMap();
-  const localCumThrough = (targetDate) =>
-    Object.entries(localByDay)
-      .filter(([d]) => d >= monthStart && d <= targetDate)
-      .reduce((s, [, v]) => s + v, 0);
-
-  const dates = Object.keys(cfg.reports).filter(d => d >= monthStart && d <= monthEnd).sort();
-  const byDate = {};
-  let cumBump = 0;
-  let spanStart = monthStart;
-  for (const date of dates) {
-    const bump = Math.max(0, cfg.reports[date] - localCumThrough(date) - cumBump);
-    const spanDays = monthDayList(spanStart, date);
-    const perDay = bump / spanDays.length;
-    for (const d of spanDays) byDate[d] = (byDate[d] || 0) + perDay;
-    cumBump += bump;
-    spanStart = nextDayISO(date);
+// date (YYYY-MM-DD) -> authoritative claude.ai spend that day, summed across
+// every model tier over the given range.
+function dailyApiCostMap(start, end) {
+  const map = {};
+  for (const r of (rawData?.api_spend || [])) {
+    if (start && r.day < start) continue;
+    if (end && r.day > end) continue;
+    map[r.day] = (map[r.day] || 0) + r.cost;
   }
-  return { byDate, total: cumBump };
+  return map;
 }
 
-// Same per-day bump as computeMonthlyBumps, generalized to any [start, end]
-// range rather than a single calendar month. Reports reset cumulative "spent
-// this month" tracking at each month boundary, so this walks every calendar
-// month a report falls in, then keeps only the days inside the requested range.
+// Per-day spend billed by claude.ai above this machine's local cost, floored
+// at zero. This is the org-wide usage the local scan can't see. Empty when no
+// claude.ai data has been fetched, so callers fall back to local cost alone.
 function computeBumpsForRange(cfg, start, end) {
-  const reportDates = Object.keys(cfg.reports);
-  if (!reportDates.length) return {};
-  const monthKeys = new Set(reportDates.map(d => d.slice(0, 7)));
-  const byDate = {};
-  for (const mk of monthKeys) {
-    const [y, m] = mk.split('-').map(Number);
-    const monthStart = mk + '-01';
-    const monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-    Object.assign(byDate, computeMonthlyBumps(cfg, monthStart, monthEnd).byDate);
+  const apiByDay = dailyApiCostMap(start, end);
+  if (!Object.keys(apiByDay).length) return {};
+  const localByDay = dailyLocalCostMap();
+  const out = {};
+  for (const [d, apiCost] of Object.entries(apiByDay)) {
+    const bump = Math.max(0, apiCost - (localByDay[d] || 0));
+    if (bump > 0) out[d] = bump;
   }
-  const filtered = {};
-  for (const [d, v] of Object.entries(byDate)) {
-    if (v && (!start || d >= start) && (!end || d <= end)) filtered[d] = v;
-  }
-  return filtered;
+  return out;
 }
 
 // Mean local daily cost over the trailing `windowDays` calendar days ending on
@@ -1716,23 +1721,21 @@ function fmtMonthDay(iso) {
 }
 
 // Projects cumulative spend to month-end from the trailing 7-day local burn
-// rate, scaled by how much higher the reconciled (local + non-tracked) total
+// rate, scaled by how much higher the reconciled (local + claude.ai gap) total
 // is than local cost alone — so the forecast tracks the real org-wide rate,
 // not just what this machine can see. The actual/historical line only ever
-// reflects ground truth (local cost + bumps already assigned); it is not
-// smoothed or backfilled, so it can dip low right after a report until local
-// usage catches back up — the forecast's calibration multiplier is what keeps
-// the projection itself honest in the meantime.
+// reflects ground truth (local cost + the claude.ai gap per day); the
+// forecast's calibration multiplier keeps the projection itself honest.
 function computeSpendProjection(cfg, monthStart, monthEnd) {
   const days = monthDayList(monthStart, monthEnd);
   const localByDay = dailyLocalCostMap();
-  const bumps = computeMonthlyBumps(cfg, monthStart, monthEnd);
+  const bumps = computeBumpsForRange(cfg, monthStart, monthEnd);
   const today = todayISO();
   const elapsed = days.filter(d => d <= today).length;
 
   let run = 0;
   const cumReconciled = days.map(d => {
-    run += (localByDay[d] || 0) + (bumps.byDate[d] || 0);
+    run += (localByDay[d] || 0) + (bumps[d] || 0);
     return d <= today ? run : null;
   });
   const reconciledToday = cumReconciled[Math.max(0, elapsed - 1)] || 0;
@@ -1762,7 +1765,7 @@ function computeSpendProjection(cfg, monthStart, monthEnd) {
   return {
     days,
     localData: days.map(d => localByDay[d] || 0),
-    bumpData: days.map(d => bumps.byDate[d] || 0),
+    bumpData: days.map(d => bumps[d] || 0),
     cumReconciled, cumProjected, limitData,
     reconciledToday, projectedEnd, crossDate,
     showProjection, overBudget,
@@ -1775,7 +1778,6 @@ function toggleSpendLimitSettings() {
   el.style.display = opening ? 'flex' : 'none';
   if (opening) {
     document.getElementById('spend-limit-input').value = loadSpendCfg().limit;
-    document.getElementById('spend-report-input').value = '';
   }
 }
 
@@ -1785,41 +1787,6 @@ function saveSpendLimitAmount() {
   cfg.limit = Number.isFinite(limit) && limit >= 0 ? limit : DEFAULT_SPEND_CFG.limit;
   saveSpendCfg(cfg);
   renderSpendLimit();
-}
-
-function addSpendReport() {
-  const input = document.getElementById('spend-report-input');
-  const amount = parseFloat(input.value);
-  if (!Number.isFinite(amount) || amount < 0) return;
-  const cfg = loadSpendCfg();
-  cfg.reports[todayISO()] = amount;
-  saveSpendCfg(cfg);
-  input.value = '';
-  renderSpendLimit();
-}
-
-function deleteSpendReport(date) {
-  const cfg = loadSpendCfg();
-  delete cfg.reports[date];
-  saveSpendCfg(cfg);
-  renderSpendLimit();
-}
-
-function renderSpendReportsList(cfg, monthStart, monthEnd) {
-  const el = document.getElementById('spend-reports-list');
-  if (!el) return;
-  const dates = Object.keys(cfg.reports).filter(d => d >= monthStart && d <= monthEnd).sort().reverse();
-  if (!dates.length) {
-    el.innerHTML = '<div class="spend-reports-empty">No reports yet this month.</div>';
-    return;
-  }
-  el.innerHTML = dates.map(d => `
-    <div class="spend-report-row">
-      <span class="date">${esc(d)}</span>
-      <span class="amount">${esc(fmtCostBig(cfg.reports[d]))}</span>
-      <button class="spend-report-del" onclick="deleteSpendReport('${esc(d)}')" title="Delete this report">&times;</button>
-    </div>
-  `).join('');
 }
 
 function renderSpendDailyChart(proj, cfg) {
@@ -1832,7 +1799,7 @@ function renderSpendDailyChart(proj, cfg) {
   // right-axis (y1) lines, which get increasing values so they draw on top.
   const datasets = [
     { type: 'bar', label: 'Claude Code (this machine)', hidden: hiddenSeries.spendDaily.has('Claude Code (this machine)'), data: proj.localData, backgroundColor: TOKEN_COLORS.input,          hoverBackgroundColor: TOKEN_HOVER.input,          stack: 'spend', yAxisID: 'y', order: 0 },
-    { type: 'bar', label: 'Non-tracked usage',          hidden: hiddenSeries.spendDaily.has('Non-tracked usage'),          data: proj.bumpData,  backgroundColor: TOKEN_COLORS.cache_creation, hoverBackgroundColor: TOKEN_HOVER.cache_creation, stack: 'spend', yAxisID: 'y', order: 0 },
+    { type: 'bar', label: 'claude.ai gap (unseen locally)', hidden: hiddenSeries.spendDaily.has('claude.ai gap (unseen locally)'), data: proj.bumpData, backgroundColor: TOKEN_COLORS.cache_creation, hoverBackgroundColor: TOKEN_HOVER.cache_creation, stack: 'spend', yAxisID: 'y', order: 0 },
     { type: 'line', label: 'Monthly limit', hidden: hiddenSeries.spendDaily.has('Monthly limit'), data: proj.limitData, yAxisID: 'y1', order: 1,
       borderColor: C.amber, borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0, tension: 0, spanGaps: true },
     { type: 'line', label: 'Cumulative spend', hidden: hiddenSeries.spendDaily.has('Cumulative spend'), data: proj.cumReconciled, yAxisID: 'y1', order: 2,
@@ -1925,7 +1892,7 @@ function renderSpendLimit() {
 
   document.getElementById('spend-limit-breakdown').textContent =
     'This machine (Claude Code): ' + fmtCostBig(localCost) +
-    '  ·  Non-tracked usage (reported): ' + fmtCostBig(bumpTotal) +
+    '  ·  claude.ai gap (unseen locally): ' + fmtCostBig(bumpTotal) +
     '  ·  Calendar month to date';
 
   const projEl = document.getElementById('spend-limit-projection');
@@ -1948,7 +1915,193 @@ function renderSpendLimit() {
   }
 
   renderSpendDailyChart(proj, cfg);
-  renderSpendReportsList(cfg, start, end);
+}
+
+// ── Reconciliation (claude.ai billed spend vs local scan) ────────────────────
+// claude.ai's usage API is authoritative, org-wide spend; the local scan sees
+// only this machine's turns. Their gap splits into "coverage" (tokens billed
+// but never scanned locally, valued at our prices) and "pricing" (identical
+// tokens valued differently than we bill them). Per tier family:
+//   reprice  = our price applied to the API token vector
+//   coverage = reprice - localCost   (token-volume difference at one price)
+//   pricing  = apiCost - reprice     (price difference on the same tokens)
+//   gap      = apiCost - localCost = coverage + pricing
+function reconTierFamily(key) {
+  const k = (key || '').toLowerCase();
+  if (k.includes('opus'))   return 'opus';
+  if (k.includes('sonnet')) return 'sonnet';
+  if (k.includes('haiku'))  return 'haiku';
+  return 'other';
+}
+
+// Representative per-tier price used to reprice API token vectors at our rates.
+function reconFamilyPrice(fam) {
+  if (fam === 'sonnet') return getPricing('claude-sonnet-5');
+  if (fam === 'haiku')  return getPricing('claude-haiku-4-5');
+  return getPricing('claude-opus-4-8');  // opus + other
+}
+
+// vec fields: input, output, cache_read, cw5m (5m cache write), cw1h (1h write).
+// price fields are per-million dollars.
+function reconTokenCost(vec, price) {
+  if (!price) return 0;
+  return (
+    vec.input     * price.input          +
+    vec.output    * price.output         +
+    vec.cache_read* price.cache_read     +
+    vec.cw5m      * price.cache_write    +
+    vec.cw1h      * price.cache_write_1h
+  ) / 1e6;
+}
+
+// Aggregate API + local token vectors per tier family over the current range +
+// model filter, plus per-day API/local/gap cost series for the chart. Model
+// selection is per exact model id; the API only knows tiers, so it's filtered
+// by the families the selected models map to.
+function computeReconciliation(start, end) {
+  const selFams = new Set([...selectedModels].map(reconTierFamily));
+  // Families with no local model to select (used only on other machines) stay
+  // in regardless of the model filter, so remote-only spend isn't dropped.
+  const localFams = new Set(allModelsList.map(reconTierFamily));
+  const fams = {};
+  const ensureFam = f => fams[f] || (fams[f] = {
+    apiCost: 0,
+    api:   { input: 0, output: 0, cache_read: 0, cw5m: 0, cw1h: 0 },
+    local: { input: 0, output: 0, cache_read: 0, cw5m: 0, cw1h: 0 },
+  });
+  const apiByDay = {}, localByDay = {}, daySet = new Set();
+
+  for (const r of (rawData?.api_spend || [])) {
+    if (start && r.day < start) continue;
+    if (end && r.day > end) continue;
+    const fam = reconTierFamily(r.group_key);
+    if (!selFams.has(fam) && localFams.has(fam)) continue;
+    const d = ensureFam(fam);
+    d.apiCost      += r.cost;
+    d.api.input    += r.input;
+    d.api.output   += r.output;
+    d.api.cache_read += r.cache_read;
+    d.api.cw5m     += r.cache_write_5m;
+    d.api.cw1h     += r.cache_write_1h;
+    apiByDay[r.day] = (apiByDay[r.day] || 0) + r.cost;
+    daySet.add(r.day);
+  }
+
+  for (const r of (rawData?.daily_by_model || [])) {
+    if (!selectedModels.has(r.model)) continue;
+    if (start && r.day < start) continue;
+    if (end && r.day > end) continue;
+    const fam = reconTierFamily(r.model);
+    const d = ensureFam(fam);
+    const cw1h = r.cache_creation_1h || 0;
+    const cw5m = Math.max(0, r.cache_creation - cw1h);
+    d.local.input    += r.input;
+    d.local.output   += r.output;
+    d.local.cache_read += r.cache_read;
+    d.local.cw5m     += cw5m;
+    d.local.cw1h     += cw1h;
+    const cost = reconTokenCost(
+      { input: r.input, output: r.output, cache_read: r.cache_read, cw5m, cw1h },
+      reconFamilyPrice(fam));
+    localByDay[r.day] = (localByDay[r.day] || 0) + cost;
+    daySet.add(r.day);
+  }
+
+  const rows = ['opus', 'sonnet', 'haiku', 'other'].filter(f => fams[f]).map(f => {
+    const d = fams[f];
+    const price = reconFamilyPrice(f);
+    const localCost = reconTokenCost(d.local, price);
+    const reprice   = reconTokenCost(d.api, price);
+    return {
+      family: f,
+      apiCost: d.apiCost,
+      localCost,
+      gap: d.apiCost - localCost,
+      coverage: reprice - localCost,
+      pricing: d.apiCost - reprice,
+    };
+  });
+  const totals = rows.reduce((t, r) => {
+    t.apiCost += r.apiCost; t.localCost += r.localCost; t.gap += r.gap;
+    t.coverage += r.coverage; t.pricing += r.pricing; return t;
+  }, { apiCost: 0, localCost: 0, gap: 0, coverage: 0, pricing: 0 });
+
+  const days = [...daySet].sort();
+  return {
+    rows, totals, days,
+    apiData:   days.map(d => apiByDay[d] || 0),
+    localData: days.map(d => localByDay[d] || 0),
+    gapData:   days.map(d => (apiByDay[d] || 0) - (localByDay[d] || 0)),
+  };
+}
+
+const RECON_TIER_LABELS = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', other: 'Other' };
+
+function renderReconciliation(start, end) {
+  const section = document.getElementById('sec-reconciliation');
+  if (!section) return;
+  if (!(rawData?.api_spend || []).length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  const rec = computeReconciliation(start, end);
+  const t = rec.totals;
+
+  const summary = [
+    { label: 'API $',      value: fmtCostBig(t.apiCost) },
+    { label: 'Local $',    value: fmtCostBig(t.localCost) },
+    { label: 'Gap $',      value: fmtCostBig(t.gap) },
+    { label: 'Coverage $', value: fmtCostBig(t.coverage) },
+    { label: 'Pricing $',  value: fmtCostBig(t.pricing) },
+  ];
+  document.getElementById('recon-summary').innerHTML = summary.map(s =>
+    `<div class="recon-stat"><div class="label">${s.label}</div><div class="value">${esc(s.value)}</div></div>`
+  ).join('');
+
+  document.getElementById('recon-table-body').innerHTML = rec.rows.map(r => `
+    <tr>
+      <td>${RECON_TIER_LABELS[r.family]}</td>
+      <td class="num">${esc(fmtCostBig(r.apiCost))}</td>
+      <td class="num">${esc(fmtCostBig(r.localCost))}</td>
+      <td class="num">${esc(fmtCostBig(r.gap))}</td>
+      <td class="num">${esc(fmtCostBig(r.coverage))}</td>
+      <td class="num">${esc(fmtCostBig(r.pricing))}</td>
+    </tr>
+  `).join('');
+
+  const fetched = rawData.api_spend_fetched_at;
+  document.getElementById('recon-caption').textContent =
+    (fetched ? 'claude.ai data as of ' + fetched : 'claude.ai data') +
+    '  ·  Local day-buckets are UTC; claude.ai buckets may differ near midnight.';
+
+  renderReconChart(rec);
+}
+
+function renderReconChart(rec) {
+  const canvas = document.getElementById('chart-recon');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (charts.recon) charts.recon.destroy();
+  const datasets = [
+    { type: 'bar', label: 'claude.ai (API)',       data: rec.apiData,   backgroundColor: TOKEN_COLORS.output, hoverBackgroundColor: TOKEN_HOVER.output, yAxisID: 'y', order: 1 },
+    { type: 'bar', label: 'Local (this machine)',  data: rec.localData, backgroundColor: TOKEN_COLORS.input,  hoverBackgroundColor: TOKEN_HOVER.input,  yAxisID: 'y', order: 1 },
+    { type: 'line', label: 'Gap', data: rec.gapData, borderColor: C.amber, backgroundColor: C.amber, borderWidth: 2, pointRadius: 0, tension: 0, yAxisID: 'y', order: 0 },
+  ];
+  datasets.forEach(d => { d.hidden = hiddenSeries.recon.has(d.label); });
+  charts.recon = new Chart(ctx, {
+    data: { labels: rec.days, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, resizeDelay: 150,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { onClick: legendIsolate('recon'), labels: { color: C.axis, boxWidth: 12 } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmtCostBig(ctx.parsed.y)}` } },
+      },
+      scales: {
+        x: { ticks: { color: C.axis, maxTicksLimit: RANGE_TICKS[selectedRange] }, grid: { color: C.border } },
+        y: { beginAtZero: true, ticks: { color: C.axis, callback: v => '$' + v }, grid: { color: C.border } },
+      }
+    }
+  });
 }
 
 // Bucket rows into 24 hours (display-TZ), summing turns + output, and count
