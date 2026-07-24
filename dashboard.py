@@ -352,6 +352,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .model-cb-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .filter-btn { padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
   .filter-btn:hover { border-color: var(--accent); color: var(--text); }
+  .filter-btn.active { background: var(--selected); border-color: var(--accent); color: var(--text); }
   /* Date range — a compact dropdown. The old segmented button row (8 buttons)
      wrapped badly in the narrow VS Code panel; a single select stays put. Styled
      to match the model trigger. */
@@ -519,6 +520,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <option value="all">All Time</option>
     </select>
   </div>
+  <div class="filter-sep"></div>
+  <div class="filter-label">Sonnet&nbsp;5 rate</div>
+  <button class="filter-btn" id="sonnet5-rate-btn" onclick="toggleSonnet5Rate()" aria-pressed="false"
+    title="Sonnet 5 launched at an introductory $2/$10 per Mtok through 2026-08-31, reverting to $3/$15. Enterprise/standard billing may charge the standard rate during the intro window. Toggle to reprice Sonnet 5 turns; the difference reconciles against your reported total in Monthly Spend Limit.">Sonnet 5: $2 / $10 (intro)</button>
 </div>
 
 <div class="container">
@@ -811,6 +816,23 @@ const PRICING = {
   'claude-haiku-4-5':  { input:  1.00, output:  5.00, cache_write:  1.25, cache_write_1h:  2.00, cache_read: 0.10 },
 };
 
+// Sonnet 5 launched at an introductory rate ($2/$10 per Mtok) through
+// 2026-08-31, reverting to standard ($3/$15). Enterprise/standard billing may
+// charge the standard rate during the intro window, so the dashboard can price
+// Sonnet 5 either way; the difference reconciles against the reported total in
+// Monthly Spend Limit.
+const SONNET5_RATES = {
+  intro:    { input: 2.00, output: 10.00, cache_write: 2.50, cache_write_1h: 4.00, cache_read: 0.20 },
+  standard: { input: 3.00, output: 15.00, cache_write: 3.75, cache_write_1h: 6.00, cache_read: 0.30 },
+};
+const SONNET5_RATE_KEY = 'cc-usage-sonnet5-rate';
+let sonnet5RateMode = (function () {
+  try { return localStorage.getItem(SONNET5_RATE_KEY) === 'standard' ? 'standard' : 'intro'; }
+  catch (e) { return 'intro'; }
+})();
+function applySonnet5Rate() { PRICING['claude-sonnet-5'] = SONNET5_RATES[sonnet5RateMode]; }
+applySonnet5Rate();
+
 function isBillable(model) {
   if (!model) return false;
   const m = model.toLowerCase();
@@ -1033,6 +1055,25 @@ function setRange(range) {
   updateURL();
   applyFilter();
   scheduleAutoRefresh();
+}
+
+function setSonnet5Rate(mode) {
+  sonnet5RateMode = mode === 'standard' ? 'standard' : 'intro';
+  try { localStorage.setItem(SONNET5_RATE_KEY, sonnet5RateMode); } catch (e) {}
+  applySonnet5Rate();
+  updateSonnet5Toggle();
+  applyFilter();
+}
+function toggleSonnet5Rate() {
+  setSonnet5Rate(sonnet5RateMode === 'intro' ? 'standard' : 'intro');
+}
+function updateSonnet5Toggle() {
+  const btn = document.getElementById('sonnet5-rate-btn');
+  if (!btn) return;
+  const std = sonnet5RateMode === 'standard';
+  btn.textContent = std ? 'Sonnet 5: $3 / $15 (std)' : 'Sonnet 5: $2 / $10 (intro)';
+  btn.classList.toggle('active', std);
+  btn.setAttribute('aria-pressed', std ? 'true' : 'false');
 }
 
 function setHourlyTZ(mode) {
@@ -2627,6 +2668,7 @@ async function loadData() {
       );
       // Build model filter (reads URL for model selection too)
       buildFilterUI(d.all_models);
+      updateSonnet5Toggle();
       updateSortIcons();
       updateModelSortIcons();
       updateProjectSortIcons();
