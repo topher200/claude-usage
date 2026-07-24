@@ -290,6 +290,15 @@ def get_dashboard_data(db_path=DB_PATH):
         "SELECT MAX(fetched_at) FROM api_spend"
     ).fetchone()[0] if _has_table(conn, "api_spend") else None
 
+    # Outcome of the last fetch attempt (ok / auth_failed / rate_limited /
+    # network_error), so the client can flag an expired sessionKey vs a
+    # transient failure vs merely stale data.
+    api_spend_status = {}
+    if _has_table(conn, "schema_meta"):
+        for k in ("api_spend_last_attempt", "api_spend_last_status", "api_spend_last_error"):
+            row = conn.execute("SELECT value FROM schema_meta WHERE key = ?", (k,)).fetchone()
+            api_spend_status[k] = row[0] if row else None
+
     conn.close()
 
     return {
@@ -302,6 +311,7 @@ def get_dashboard_data(db_path=DB_PATH):
         "top_dispatches":  top_dispatches,
         "api_spend":       api_spend,
         "api_spend_fetched_at": api_spend_fetched_at,
+        "api_spend_status": api_spend_status,
         "generated_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -428,6 +438,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .recon-stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
   .recon-stat .value { font-size: 20px; font-weight: 700; font-family: monospace; }
   .recon-chart-wrap { position: relative; height: 260px; margin-top: 18px; }
+  .recon-banner { border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; font-size: 13px; line-height: 1.45; border: 1px solid; }
+  .recon-banner.red   { color: var(--red); border-color: var(--red); background: rgba(207,34,46,0.06); }
+  .recon-banner.amber { color: #8A6D00; border-color: #B08800; background: rgba(176,136,0,0.08); }
+  .session-key-box { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 6px; }
+  .session-key-box > summary { cursor: pointer; padding: 8px 12px; font-size: 12px; font-weight: 600; color: var(--muted); user-select: none; }
+  .session-key-box > summary:hover { color: var(--text); }
+  .session-key-box[open] > summary { border-bottom: 1px solid var(--border); }
+  .session-key-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .session-key-help { font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .session-key-body textarea { width: 100%; min-height: 72px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: monospace; font-size: 12px; resize: vertical; }
+  .session-key-body textarea:focus { outline: none; border-color: var(--accent); }
+  .session-key-actions { display: flex; align-items: center; gap: 12px; }
+  #session-key-msg { font-size: 12px; color: var(--muted); }
 
   .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
   /* min-width:0 lets the grid column shrink below the canvas's intrinsic
@@ -586,6 +609,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
   <div class="table-card" id="sec-reconciliation" data-card="reconciliation" style="display:none;">
     <div class="section-title"><span class="card-caret">&#9656;</span>Reconciliation &mdash; claude.ai vs local</div>
+    <div id="recon-banner" style="display:none;"></div>
+    <details id="session-key-details" class="session-key-box">
+      <summary>Update sessionKey</summary>
+      <div class="session-key-body">
+        <div class="session-key-help">Paste your claude.ai <code>sessionKey</code>, or a whole browser "Copy as cURL" request (I'll extract the key and org id).</div>
+        <textarea id="session-key-input" rows="4" spellcheck="false" placeholder="sk-ant-sid01-… or a full curl command"></textarea>
+        <div class="session-key-actions">
+          <button class="export-btn" id="session-key-save" onclick="saveSessionKey()">Save &amp; refresh</button>
+          <span id="session-key-msg"></span>
+        </div>
+      </div>
+    </details>
     <div class="recon-summary" id="recon-summary"></div>
     <table>
       <thead><tr>
@@ -2043,6 +2078,8 @@ function renderReconciliation(start, end) {
   if (!(rawData?.api_spend || []).length) { section.style.display = 'none'; return; }
   section.style.display = '';
 
+  renderReconBanner();
+
   const rec = computeReconciliation(start, end);
   const t = rec.totals;
 
@@ -2074,6 +2111,74 @@ function renderReconciliation(start, end) {
     '  ·  Local day-buckets are UTC; claude.ai buckets may differ near midnight.';
 
   renderReconChart(rec);
+}
+
+// Surface the authoritative claude.ai feed's health: a red banner when the
+// sessionKey is rejected (auth_failed) that also opens the update field, an
+// amber banner for transient reach failures or data older than ~a day, and
+// nothing when the last fetch was fresh and successful.
+function renderReconBanner() {
+  const banner = document.getElementById('recon-banner');
+  if (!banner) return;
+  const details = document.getElementById('session-key-details');
+  const status = rawData.api_spend_status?.api_spend_last_status;
+  const fetchedRaw = rawData.api_spend_fetched_at;
+  const fetched = fetchedRaw ? new Date(fetchedRaw) : null;
+  const stale = !fetched || (Date.now() - fetched.getTime()) > 26 * 3600 * 1000;
+  const asOf = fetched ? fetched.toLocaleString() : 'never';
+
+  let cls = '', msg = '', expand = false;
+  if (status === 'auth_failed') {
+    cls = 'red';
+    msg = 'Your claude.ai sessionKey has expired. Paste a fresh one below to resume updates.';
+    expand = true;
+  } else if (status === 'rate_limited' || status === 'network_error') {
+    cls = 'amber';
+    msg = "Couldn't reach claude.ai (" + esc(status) + '); will retry automatically. Showing data as of ' + esc(asOf) + '.';
+  } else if (stale) {
+    cls = 'amber';
+    msg = 'claude.ai data is stale (as of ' + esc(asOf) + '). It refreshes about daily; if this persists your sessionKey may have expired.';
+  }
+
+  if (!cls) {
+    banner.className = '';
+    banner.style.display = 'none';
+    banner.innerHTML = '';
+  } else {
+    banner.className = 'recon-banner ' + cls;
+    banner.style.display = '';
+    banner.innerHTML = msg;
+    if (expand && details) details.open = true;
+  }
+}
+
+// Post the raw textarea (a bare sessionKey or a full "Copy as cURL" request) to
+// the server, which extracts the key + org id and test-fetches. On success the
+// whole page reloads from the freshly authoritative data.
+async function saveSessionKey() {
+  const input = document.getElementById('session-key-input');
+  const msgEl = document.getElementById('session-key-msg');
+  const btn = document.getElementById('session-key-save');
+  const value = (input?.value || '').trim();
+  if (!value) { msgEl.textContent = 'Paste a sessionKey or curl request first.'; return; }
+
+  btn.disabled = true;
+  msgEl.textContent = 'Saving…';
+  try {
+    const resp = await fetch('/api/set-session-key', { method: 'POST', body: value });
+    const result = await resp.json();
+    if (result.ok) {
+      msgEl.textContent = 'Updated — ' + (result.message || 'sessionKey saved.');
+      input.value = '';
+      await loadData();
+    } else {
+      msgEl.textContent = result.message || 'Update failed.';
+    }
+  } catch (e) {
+    msgEl.textContent = 'Request failed: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function renderReconChart(rec) {
@@ -3089,6 +3194,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 projects_dirs=scanner.DEFAULT_PROJECTS_DIRS,
                 verbose=False,
             )
+            body = json.dumps(result).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif path == "/api/set-session-key":
+            # Accept a raw sessionKey, a cookie string, or a whole "copy as
+            # cURL" blob; store it and immediately re-fetch to validate. The
+            # secret only ever travels to this localhost process and the file
+            # it writes under ~/.claude, never into the repo.
+            import spend_api
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                obj = json.loads(raw)
+                raw = obj.get("value", raw) if isinstance(obj, dict) else raw
+            except ValueError:
+                pass
+            parsed = spend_api.parse_credentials_input(raw)
+            if not parsed["session_key"]:
+                result = {"ok": False, "status": "parse_error",
+                          "message": "No sessionKey found in the pasted text."}
+            else:
+                spend_api.save_credentials(parsed["session_key"], parsed["org_id"])
+                result = spend_api.refresh_spend(db_path=DB_PATH)
+                result["ok"] = result.get("status") == "ok"
             body = json.dumps(result).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
