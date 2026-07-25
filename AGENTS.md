@@ -9,8 +9,9 @@ Guidance for any coding agent (Codex, Claude Code, etc.) working on this reposit
 Three Python files, stdlib only, no `pip install` step. Python 3.8+.
 
 - [scanner.py](scanner.py) — parses Claude Code JSONL transcripts into a SQLite DB at `~/.claude/usage.db`.
-- [cli.py](cli.py) — terminal commands (`scan` / `today` / `week` / `stats` / `dashboard`).
+- [cli.py](cli.py) — terminal commands (`scan` / `today` / `week` / `stats` / `dashboard` / `fetch-spend`).
 - [dashboard.py](dashboard.py) — single-file `http.server` serving an embedded HTML/JS SPA on `localhost:8080`.
+- [spend_api.py](spend_api.py) — fetches authoritative per-day spend from the claude.ai usage API (the ground truth the scanned transcripts are reconciled against).
 
 Use `python` on Windows, `python3` on macOS/Linux. Both work the same.
 
@@ -65,6 +66,14 @@ These three things will bite you if you don't know them:
 2. **Session totals are recomputed from `turns` at the end of `scan()`.** During an incremental scan `upsert_sessions` adds tokens additively, but `insert_turns` uses `INSERT OR IGNORE` against the `message_id` unique index — so if a turn is a duplicate, session totals would drift. The final `UPDATE sessions ... (SELECT SUM ... FROM turns)` block reconciles this. Preserve it if you refactor scan logic.
 
 3. **Session primary model priority is opus > sonnet > haiku** (`_model_priority` in [scanner.py](scanner.py)). This prevents a subagent's haiku turn from overwriting the session's opus model when an existing session is updated. Per-turn model is always honored in the `turns` table; only the session-level summary uses the priority.
+
+### claude.ai reconciliation (authoritative spend)
+
+The scanner's cost is an *estimate* from local transcripts (this machine's `~/.claude/projects/` plus any `CLAUDE_USAGE_EXTRA_DIRS`). The claude.ai usage API is the *ground truth* Anthropic actually bills, org-wide across every machine. `spend_api.fetch_spend()` hits `…/organizations/{org}/usage/spend` (`group_by=model_tier|product_surface`, `granularity=daily` — hourly is rejected, daily is the finest bucket) and `cli.py fetch-spend` upserts it into the `api_spend` table (`scanner.store_api_spend`). The dashboard's **Reconciliation** panel then splits `api_cost − local_cost` per tier into a **coverage** gap (tokens billed but absent locally, valued at our prices) and a **pricing** gap (identical tokens, price mismatch). A near-zero pricing gap validates the `PRICING` dicts; a large coverage gap means usage the local scan can't see.
+
+- **Credentials never touch the repo.** They resolve from `CLAUDE_AI_ORG_ID` + `CLAUDE_AI_COOKIE` env vars, else `~/.claude/claude-usage/credentials.json` (`{"org_id", "cookie"}`). The durable `sessionKey` cookie alone authenticates (the Cloudflare cookies aren't required); it expires eventually and `fetch-spend` surfaces a refresh prompt on 401/403.
+- **The API buckets days by Anthropic's own timezone** (not UTC), so per-day API-vs-local can disagree by a day near midnight; totals over a range are unaffected.
+- Refresh cadence is manual/periodic (a daily `fetch-spend` is plenty), not real-time — the ground truth only moves as fast as you re-fetch it.
 
 ### Cost calculation
 

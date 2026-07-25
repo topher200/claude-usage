@@ -451,6 +451,53 @@ def cmd_dashboard(projects_dir=None, host=None, port=None, no_browser=False, sur
     serve(host=host, port=port, surface=surface)
 
 
+def cmd_fetch_spend(start=None, end=None):
+    """Pull authoritative per-day spend from claude.ai into the `api_spend` table.
+
+    Defaults to the current month through today. Credentials come from
+    spend_api (env CLAUDE_AI_ORG_ID/COOKIE, or ~/.claude/claude-usage/credentials.json).
+    """
+    import scanner
+    import spend_api
+
+    today = date.today()
+    if not start:
+        start = today.replace(day=1).isoformat()
+    if not end:
+        end = today.isoformat()
+
+    if not spend_api.has_credentials():
+        print("No claude.ai credentials found.")
+        print("Set CLAUDE_AI_ORG_ID + CLAUDE_AI_COOKIE, or write")
+        print(f"  {spend_api.CREDENTIALS_PATH}")
+        print('  {"org_id": "<org-uuid>", "cookie": "sessionKey=sk-ant-sid02-..."}')
+        print("The sessionKey cookie alone is enough; copy it from a logged-in claude.ai session.")
+        sys.exit(1)
+
+    try:
+        data = spend_api.fetch_spend(start, end, group_by="model_tier")
+    except spend_api.AuthError as e:
+        print(f"Auth failed: {e}")
+        print("Your sessionKey has likely expired. Copy a fresh one from claude.ai and update your credentials.")
+        sys.exit(1)
+    except spend_api.RateLimitError as e:
+        print(f"Rate limited: {e}")
+        sys.exit(1)
+    except spend_api.SpendApiError as e:
+        print(f"Fetch failed: {e}")
+        sys.exit(1)
+
+    conn = scanner.get_db()
+    scanner.init_db(conn)
+    fetched_at = datetime.now().isoformat(timespec="seconds")
+    scanner.store_api_spend(conn, data["series"], "model_tier", fetched_at)
+    total = sum(s["cost_minor_units"] for s in data["series"]) / 100
+    days = len({s["bucket"] for s in data["series"]})
+    conn.close()
+    print(f"Fetched claude.ai spend {start}..{end}: {days} days, "
+          f"{len(data['series'])} rows, ${total:,.2f} total.")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 USAGE = """
@@ -461,6 +508,8 @@ Usage:
   python cli.py today                        Show today's usage summary
   python cli.py week                         Show last 7 days (per-day + by-model)
   python cli.py stats                        Show all-time statistics
+  python cli.py fetch-spend [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+                                                 Pull authoritative spend from claude.ai (defaults to this month)
   python cli.py dashboard [--projects-dir PATH] [--host HOST] [--port PORT] [--no-browser] [--surface SURFACE]
                                                  Scan + start dashboard (opens a browser unless --no-browser)
   python cli.py --version                    Print the version and exit
@@ -472,6 +521,7 @@ COMMANDS = {
     "week": cmd_week,
     "stats": cmd_stats,
     "dashboard": cmd_dashboard,
+    "fetch-spend": cmd_fetch_spend,
 }
 
 def parse_named_arg(args, flag):
@@ -505,6 +555,8 @@ def main():
         )
     elif command == "scan" and projects_dir:
         cmd_scan(projects_dir=projects_dir)
+    elif command == "fetch-spend":
+        cmd_fetch_spend(start=parse_named_arg(rest, "--start"), end=parse_named_arg(rest, "--end"))
     else:
         COMMANDS[command]()
 
