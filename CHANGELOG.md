@@ -4,6 +4,7 @@
 
 ### Scanner
 
+- New **`CLAUDE_USAGE_EXTRA_DIRS`** env var (os.pathsep-separated) adds transcript roots beyond `~/.claude/projects/` so usage copied from other machines folds into the same database. Overlap is deduped by `message.id`, so re-scanning a copy that shares sessions never double-counts; a missing/cleared path (e.g. a `/tmp` copy gone after reboot) is silently skipped and already-imported turns persist. Multi-machine spend then appears in the normal model/project/cost views with no separate bucketing.
 - Cost now bills **1-hour cache writes at 2x input** instead of the 5-minute 1.25x rate. Claude Code splits cache-creation tokens into 5m and 1h TTL buckets under `usage.cache_creation`; the scanner records the 1h portion (`cache_creation_1h_tokens` on `turns`, `total_cache_creation_1h` on `sessions`) so each is priced correctly. Heavy Claude Code sessions are dominated by 1h cache, so this materially raises estimated cost. Existing databases need a full rescan (dashboard **Rescan** button, or delete `~/.claude/usage.db` and re-scan) to backfill the split for already-processed transcripts.
 
 ### Dashboard

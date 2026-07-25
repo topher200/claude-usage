@@ -20,7 +20,21 @@ VERSION = "1.5.5"
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 XCODE_PROJECTS_DIR = Path.home() / "Library" / "Developer" / "Xcode" / "CodingAssistant" / "ClaudeAgentConfig" / "projects"
 DB_PATH = Path(os.environ.get("CLAUDE_USAGE_DB", Path.home() / ".claude" / "usage.db"))
-DEFAULT_PROJECTS_DIRS = [PROJECTS_DIR, XCODE_PROJECTS_DIR]
+
+
+def extra_projects_dirs():
+    """Extra transcript roots from the CLAUDE_USAGE_EXTRA_DIRS env var
+    (os.pathsep-separated), for folding usage copied from other machines into
+    the same database. Blank entries are ignored and ~ is expanded. Scanning a
+    missing dir is a no-op, so a path that later disappears (e.g. a /tmp copy
+    cleared on reboot) is harmless; turns already imported stay in the DB, and
+    the message_id dedupe index means re-scanning an overlapping copy never
+    double-counts."""
+    raw = os.environ.get("CLAUDE_USAGE_EXTRA_DIRS", "")
+    return [Path(p.strip()).expanduser() for p in raw.split(os.pathsep) if p.strip()]
+
+
+DEFAULT_PROJECTS_DIRS = [PROJECTS_DIR, XCODE_PROJECTS_DIR] + extra_projects_dirs()
 
 # Higher number = higher priority when choosing a session's primary model.
 # Fable / Mythos are Anthropic's most capable class, so they outrank Opus.
