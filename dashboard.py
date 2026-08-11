@@ -569,7 +569,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <option value="all">All Time</option>
     </select>
   </div>
-  <span class="tz-note" title="Days and hours are UTC throughout, matching the day boundary claude.ai bills on. Ranges near midnight will not line up with your local calendar.">UTC</span>
+  <span class="tz-note" title="Dates and day buckets are UTC, matching the day boundary claude.ai bills on, so ranges near midnight will not line up with your local calendar. The hourly distribution chart is the one exception: its hour axis is Eastern.">UTC days</span>
   <div class="filter-sep"></div>
   <div class="filter-label">Sonnet&nbsp;5 rate</div>
   <button class="filter-btn" id="sonnet5-rate-btn" onclick="toggleSonnet5Rate()" aria-pressed="false"
@@ -645,7 +645,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="chart-header">
         <h2><span class="card-caret">&#9656;</span><span id="hourly-chart-title">Average Hourly Distribution</span></h2>
         <div class="chart-header-right">
-          <span class="peak-legend" title="UTC 12:00–17:00 — Anthropic's peak-hour throttling window, Mon–Fri 05:00–11:00 PT"><span class="peak-swatch"></span>Peak hours (12–17 UTC)</span>
+          <span class="peak-legend" title="08:00–14:00 ET — Anthropic's peak-hour throttling window (Mon–Fri 05:00–11:00 PT). Fixed year-round: Eastern and Pacific shift together."><span class="peak-swatch"></span>Peak hours (08–14 ET)</span>
           <span class="chart-day-count" id="hourly-day-count"></span>
         </div>
       </div>
@@ -819,13 +819,41 @@ let projectLimit = TABLE_STEPS[0];
 let branchLimit = TABLE_STEPS[0];
 let dispatchesLimit = TABLE_STEPS[0];
 
-// ── Peak-hour config ───────────────────────────────────────────────────────
-// Anthropic throttles Mon–Fri 05:00–11:00 PT. We approximate as fixed UTC hours
-// 12–17 (matches PDT; during PST the window shifts by 1h — accepted simplification).
-const PEAK_HOURS_UTC = new Set([12, 13, 14, 15, 16, 17]);
+// ── Hour-of-day buckets ────────────────────────────────────────────────────
+// Hours are Eastern, the one exception to the dashboard's UTC calendar. Anthropic's
+// throttling window is defined in US Pacific hours, and Pacific and Eastern shift
+// together, so in Eastern the window sits at a fixed 08:00–14:00 all year while the
+// equivalent UTC window moves between 12–17 and 13–18 with daylight saving. Day
+// buckets and every date range stay UTC; only the hour axis is Eastern.
+const HOUR_TZ = 'America/New_York';
+const HOUR_TZ_LABEL = 'ET';
 
-function isPeakHour(utcHour) {
-  return PEAK_HOURS_UTC.has(utcHour);
+// Anthropic throttles Mon–Fri 05:00–11:00 PT, i.e. 08:00–14:00 ET.
+const PEAK_HOURS_ET = new Set([8, 9, 10, 11, 12, 13]);
+
+function isPeakHour(displayHour) {
+  return PEAK_HOURS_ET.has(displayHour);
+}
+
+const _hourTZFormat = new Intl.DateTimeFormat('en-CA', {
+  timeZone: HOUR_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', hour12: false,
+});
+const _hourTZCache = new Map();
+
+// A stored (UTC date, UTC hour) pair as its hour in HOUR_TZ. Resolved through Intl
+// rather than a fixed offset so daylight saving is handled per instant.
+function displayHourFor(day, hour) {
+  const key = day + 'T' + hour;
+  const hit = _hourTZCache.get(key);
+  if (hit !== undefined) return hit;
+  const at = new Date(day + 'T' + String(hour).padStart(2, '0') + ':00:00Z');
+  let h = 0;
+  for (const part of _hourTZFormat.formatToParts(at)) {
+    if (part.type === 'hour') h = Number(part.value) % 24;  // some engines emit 24 for midnight
+  }
+  _hourTZCache.set(key, h);
+  return h;
 }
 
 function formatHourLabel(h) {
@@ -2182,15 +2210,19 @@ function renderReconChart(rec) {
   });
 }
 
-// Bucket rows into 24 hours (display-TZ), summing turns + output, and count
-// the unique days in the input so the caller can compute per-day averages.
+// Bucket rows into 24 hours of HOUR_TZ, summing turns + output, and count the
+// unique days in the input so the caller can compute per-day averages. The day
+// count stays on the UTC days the range selected: the hour buckets redistribute
+// the same turns, so dividing by the number of days selected gives "turns in this
+// hour on an average day of the range".
 function aggregateHourly(rows) {
   const byHour = {};
   for (let h = 0; h < 24; h++) byHour[h] = { turns: 0, output: 0 };
   const days = new Set();
   for (const r of rows) {
-    byHour[r.hour].turns  += r.turns  || 0;
-    byHour[r.hour].output += r.output || 0;
+    const h = displayHourFor(r.day, r.hour);
+    byHour[h].turns  += r.turns  || 0;
+    byHour[h].output += r.output || 0;
     if (r.day) days.add(r.day);
   }
   const dayCount = days.size;
@@ -2210,8 +2242,8 @@ function aggregateHourly(rows) {
 function renderHourlyChart(agg) {
   const dayCountEl = document.getElementById('hourly-day-count');
   dayCountEl.textContent = agg.dayCount
-    ? agg.dayCount + ' day' + (agg.dayCount === 1 ? '' : 's') + ' averaged · UTC'
-    : 'No data · UTC';
+    ? agg.dayCount + ' day' + (agg.dayCount === 1 ? '' : 's') + ' averaged · ' + HOUR_TZ_LABEL + ' hours'
+    : 'No data · ' + HOUR_TZ_LABEL + ' hours';
 
   const ctx = document.getElementById('chart-hourly').getContext('2d');
   if (charts.hourly) charts.hourly.destroy();
@@ -2269,7 +2301,7 @@ function renderHourlyChart(agg) {
               if (!items.length) return '';
               const idx = items[0].dataIndex;
               const h = agg.hours[idx];
-              const base = formatHourLabel(h.hour) + ' UTC';
+              const base = formatHourLabel(h.hour) + ' ' + HOUR_TZ_LABEL;
               return h.peak ? base + ' · Peak — Anthropic US hours' : base;
             },
             label: (item) => {
@@ -2282,7 +2314,7 @@ function renderHourlyChart(agg) {
         },
       },
       scales: {
-        x: { ticks: { color: C.axis, maxRotation: 0, autoSkip: false, font: { size: 10 } }, grid: { color: C.border } },
+        x: { ticks: { color: C.axis, maxRotation: 0, autoSkip: false, font: { size: 10 } }, grid: { color: C.border }, title: { display: true, text: 'Hour of day (' + HOUR_TZ_LABEL + ')', color: C.axis, font: { size: 11 } } },
         y:  { position: 'left',  beginAtZero: true, ticks: { color: C.axis, callback: v => v.toFixed(1) },     grid: { color: C.border }, title: { display: true, text: 'Avg turns / hour',         color: C.axis, font: { size: 11 } } },
         y1: { position: 'right', beginAtZero: true, ticks: { color: C.axis, callback: v => fmt(v) }, grid: { drawOnChartArea: false },   title: { display: true, text: 'Avg output tokens / hour', color: C.axis, font: { size: 11 } } },
       }

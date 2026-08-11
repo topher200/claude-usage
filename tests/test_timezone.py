@@ -1,4 +1,4 @@
-"""Tests for the UTC day convention.
+"""Tests for the UTC day convention and the hourly chart's Eastern hour axis.
 
 Turns are bucketed by the UTC portion of their timestamp (`substr(timestamp, 1, 10)`),
 and claude.ai bills on a day boundary at or within a couple of hours of UTC, so every
@@ -148,22 +148,89 @@ class TestDashboardDateHelpersAreUtc(unittest.TestCase):
         self.assertIn('class="tz-note"', HTML_TEMPLATE)
 
 
-class TestHourlyChartIsUtcOnly(unittest.TestCase):
-    """The hourly distribution has one timezone, matching every other chart."""
+class TestHourlyChartHours(unittest.TestCase):
+    """Hour-of-day buckets are Eastern — the one documented exception to the UTC
+    calendar, because the throttling window they highlight is fixed in Eastern and
+    moves in UTC. Day buckets and date ranges stay UTC."""
 
-    def test_tz_toggle_removed(self):
+    def test_viewer_dependent_tz_handling_removed(self):
+        """The hour axis is a fixed zone, not the viewer's, and not a toggle."""
         for token in ('data-tz="local"', 'data-tz="utc"', "setHourlyTZ", "hourlyTZ",
-                      "tzDisplayName", "utcHourToDisplay", "localOffsetHours"):
+                      "tzDisplayName", "utcHourToDisplay", "localOffsetHours",
+                      "getTimezoneOffset"):
             with self.subTest(token=token):
                 self.assertNotIn(token, HTML_TEMPLATE)
 
-    def test_hours_are_labelled_utc(self):
-        self.assertIn("' averaged · UTC'", HTML_TEMPLATE)
-        self.assertIn("formatHourLabel(h.hour) + ' UTC'", HTML_TEMPLATE)
+    def test_hour_zone_is_fixed_eastern(self):
+        self.assertIn("const HOUR_TZ = 'America/New_York';", HTML_TEMPLATE)
+        self.assertIn("const HOUR_TZ_LABEL = 'ET';", HTML_TEMPLATE)
 
-    def test_peak_hours_keyed_directly_off_utc_hour(self):
-        self.assertIn("function isPeakHour(utcHour)", HTML_TEMPLATE)
-        self.assertIn("return PEAK_HOURS_UTC.has(utcHour);", HTML_TEMPLATE)
+    def test_hours_resolved_through_intl_not_a_fixed_offset(self):
+        """A fixed offset would be wrong for about five months a year; Intl
+        resolves each instant, so DST and its transition days are handled."""
+        self.assertIn("timeZone: HOUR_TZ", HTML_TEMPLATE)
+        self.assertIn("function displayHourFor(day, hour)", HTML_TEMPLATE)
+        self.assertIn("formatToParts", HTML_TEMPLATE)
+
+    def test_hours_are_labelled_et(self):
+        self.assertIn("HOUR_TZ_LABEL + ' hours'", HTML_TEMPLATE)
+        self.assertIn("formatHourLabel(h.hour) + ' ' + HOUR_TZ_LABEL", HTML_TEMPLATE)
+        self.assertIn("'Hour of day (' + HOUR_TZ_LABEL + ')'", HTML_TEMPLATE)
+
+    def test_peak_hours_keyed_off_the_display_hour(self):
+        self.assertIn("function isPeakHour(displayHour)", HTML_TEMPLATE)
+        self.assertIn("return PEAK_HOURS_ET.has(displayHour);", HTML_TEMPLATE)
+
+    def test_hour_bucketing_does_not_leak_into_the_range_filter(self):
+        """Only the hour axis is Eastern. getRangeBounds stays on UTC."""
+        start = HTML_TEMPLATE.index("function getRangeBounds(range)")
+        end = HTML_TEMPLATE.index("function readURLRange()")
+        body = HTML_TEMPLATE[start:end]
+        self.assertNotIn("HOUR_TZ", body)
+        self.assertNotIn("America/New_York", body)
+
+
+class TestPeakWindowMatchesPacificDefinition(unittest.TestCase):
+    """`PEAK_HOURS_ET` is a derived value: Anthropic defines the throttling window
+    as Mon-Fri 05:00-11:00 Pacific. These assert the constant still equals that
+    window converted to Eastern, in both daylight-saving regimes, rather than
+    restating the numbers — and that the same window in UTC is not constant, which
+    is the reason the hour axis is not UTC."""
+
+    PACIFIC_START, PACIFIC_END = 5, 11  # 05:00 through 10:59 PT
+
+    def setUp(self):
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:  # pragma: no cover - Python < 3.9
+            self.skipTest("zoneinfo requires Python 3.9+")
+        try:
+            self.et = ZoneInfo("America/New_York")
+            self.pt = ZoneInfo("America/Los_Angeles")
+        except Exception:  # pragma: no cover - system without a tz database
+            self.skipTest("system tz database unavailable")
+
+    def _pacific_window_in(self, zone, day):
+        return {
+            datetime.fromisoformat(f"{day}T{h:02d}:00:00")
+            .replace(tzinfo=self.pt).astimezone(zone).hour
+            for h in range(self.PACIFIC_START, self.PACIFIC_END)
+        }
+
+    def _declared_peak_hours(self):
+        marker = "const PEAK_HOURS_ET = new Set(["
+        start = HTML_TEMPLATE.index(marker) + len(marker)
+        return {int(x) for x in HTML_TEMPLATE[start:HTML_TEMPLATE.index("]", start)].split(",")}
+
+    def test_declared_hours_match_the_pacific_window_year_round(self):
+        declared = self._declared_peak_hours()
+        for day in ("2026-01-15", "2026-04-15", "2026-07-15", "2026-11-15"):
+            with self.subTest(day=day):
+                self.assertEqual(declared, self._pacific_window_in(self.et, day))
+
+    def test_the_same_window_is_not_constant_in_utc(self):
+        self.assertNotEqual(self._pacific_window_in(timezone.utc, "2026-01-15"),
+                            self._pacific_window_in(timezone.utc, "2026-07-15"))
 
 
 if __name__ == "__main__":

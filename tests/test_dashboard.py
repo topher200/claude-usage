@@ -428,9 +428,10 @@ class TestHTMLTemplate(unittest.TestCase):
         self.assertIn('id="chart-hourly"', HTML_TEMPLATE)
 
     def test_hourly_peak_hour_constants(self):
-        """Peak-hour set covers UTC 12–17 (Mon–Fri 05:00–11:00 PT)."""
-        self.assertIn('PEAK_HOURS_UTC', HTML_TEMPLATE)
-        self.assertIn('[12, 13, 14, 15, 16, 17]', HTML_TEMPLATE)
+        """Peak-hour set covers ET 08–13 (Mon–Fri 05:00–11:00 PT). See
+        tests/test_timezone.py for the tie back to the Pacific definition."""
+        self.assertIn('PEAK_HOURS_ET', HTML_TEMPLATE)
+        self.assertIn('[8, 9, 10, 11, 12, 13]', HTML_TEMPLATE)
 
     def test_today_range_option_present(self):
         """The 'Today' range is wired into RANGE_LABELS, RANGE_TICKS,
