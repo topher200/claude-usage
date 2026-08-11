@@ -22,8 +22,10 @@ python cli.py scan                  # incremental scan (fast on re-run)
 python cli.py today                 # today's usage by model
 python cli.py week                  # last 7 days, per-day + by-model
 python cli.py stats                 # all-time stats
-python cli.py dashboard             # scan + open http://localhost:8080
-python cli.py scan --projects-dir PATH    # scan a custom transcripts dir
+python cli.py dashboard                          # scan + open http://localhost:8080
+python cli.py dashboard --host 0.0.0.0 --port 9000
+python cli.py scan --projects-dir PATH           # scan a custom transcripts dir
+# or via env vars:
 HOST=0.0.0.0 PORT=9000 python cli.py dashboard
 
 python -m unittest discover -s tests -v             # full test suite (CI runs this)

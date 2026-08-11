@@ -93,7 +93,17 @@ def require_db():
     if not DB_PATH.exists():
         print("Database not found. Run: python cli.py scan")
         sys.exit(1)
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    # Ensure the schema is current before querying. The read commands query the
+    # `agents` table and the `is_subagent`/`agent_id` columns, so a pre-existing
+    # DB from before those were added would raise "no such column" when a read
+    # command runs before the next scan migrates it. init_db is idempotent
+    # (CREATE ... IF NOT EXISTS + additive column checks), so this is a cheap
+    # no-op once migrated. Mirrors get_dashboard_data in dashboard.py.
+    from scanner import init_db
+    init_db(conn)
+    return conn
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -105,7 +115,6 @@ def cmd_scan(projects_dir=None, verbose=True):
 
 def cmd_today():
     conn = require_db()
-    conn.row_factory = sqlite3.Row
     today = date.today().isoformat()
 
     rows = conn.execute("""
@@ -175,7 +184,6 @@ def cmd_today():
 
 def cmd_week():
     conn = require_db()
-    conn.row_factory = sqlite3.Row
 
     today_d = date.today()
     start_d = today_d - timedelta(days=6)
@@ -273,7 +281,6 @@ def cmd_week():
 
 def cmd_stats():
     conn = require_db()
-    conn.row_factory = sqlite3.Row
 
     # Session-level info (count, date range)
     session_info = conn.execute("""

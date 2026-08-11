@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.5.5 — TBD
+## v1.6.0 — TBD
 
 ### Scanner
 
@@ -21,6 +21,25 @@
 
 - New **`fetch-spend`** command (`python cli.py fetch-spend [--start YYYY-MM-DD] [--end YYYY-MM-DD]`, default this month) pulls authoritative spend from the claude.ai usage API into the `api_spend` table via the new `spend_api.py` module. Credentials resolve from `CLAUDE_AI_ORG_ID` + `CLAUDE_AI_COOKIE` env vars or `~/.claude/claude-usage/credentials.json` and are never committed or logged; the durable `sessionKey` cookie alone authenticates, and an expired one surfaces a clear refresh prompt.
 - New **`set-session-key`** command stores/refreshes the claude.ai sessionKey from a raw key, a cookie string, or a whole "copy as cURL" paste (it extracts the key and org id), then validates it with an immediate fetch.
+
+### Project / docs
+
+- Merged upstream `v1.5.5`. The Est. Cost overlay it adds to the Daily Token Usage chart prices the 5m/1h cache-write split, matching the rest of this fork's cost math.
+
+## v1.5.5 — 2026-07-10
+
+### Dashboard
+
+- Added an **Est. Cost line overlay** to the Daily Token Usage chart — a legend-toggleable line on a dedicated right-hand axis, priced **per model before the daily aggregation** so multi-model days are costed correctly (#151, thanks @paulabenzar).
+- Fixed **"This Month"** (and the other calendar ranges) including the previous month's last day in UTC+ timezones: date-range bounds are now formatted from local calendar components instead of `toISOString()` (UTC). The same local-date helper is now used by `rangeIncludesToday`, so it can no longer disagree with the range bounds near UTC midnight (#151, thanks @paulabenzar).
+
+### Scanner / CLI
+
+- The `today`, `week`, and `stats` commands now run the idempotent schema migration when they open the database, so reading before the next `scan` no longer crashes with `sqlite3.OperationalError: no such column: is_subagent` on a database created before subagent tracking existed. The dashboard already did this; the CLI read path now matches (#153, thanks @iliaal).
+
+### Project / docs
+
+- Documented the `dashboard` command's `--host` / `--port` flags in the README and AGENTS.md — the flags already worked (and are shown in the built-in `USAGE` text) but only the `HOST` / `PORT` environment variables were documented (#150, thanks @subhamchbty).
 
 ## v1.5.4 — 2026-07-01
 
