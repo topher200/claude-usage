@@ -423,10 +423,9 @@ class TestHTMLTemplate(unittest.TestCase):
         self.assertIn("return null;", HTML_TEMPLATE)
 
     def test_hourly_chart_canvas_present(self):
-        """Hourly distribution chart has a canvas + TZ toggle."""
+        """Hourly distribution chart has a canvas. Hours are UTC, like every
+        other date and hour in the dashboard (see tests/test_timezone.py)."""
         self.assertIn('id="chart-hourly"', HTML_TEMPLATE)
-        self.assertIn('data-tz="local"', HTML_TEMPLATE)
-        self.assertIn('data-tz="utc"', HTML_TEMPLATE)
 
     def test_hourly_peak_hour_constants(self):
         """Peak-hour set covers UTC 12–17 (Mon–Fri 05:00–11:00 PT)."""

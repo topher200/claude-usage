@@ -8,7 +8,7 @@ import sqlite3
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 from scanner import VERSION, init_db
 
@@ -312,7 +312,7 @@ def get_dashboard_data(db_path=DB_PATH):
         "api_spend":       api_spend,
         "api_spend_fetched_at": api_spend_fetched_at,
         "api_spend_status": api_spend_status,
-        "generated_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at":    datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
 
@@ -403,6 +403,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .range-select select:hover, .range-select select:focus { border-color: var(--accent); outline: none; }
   .range-select::after { content: "\25BE"; position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 10px; pointer-events: none; }
   .range-select option { background: var(--card); color: var(--text); }
+  .tz-note { flex-shrink: 0; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: 0.05em; cursor: help; }
 
   .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
   .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
@@ -466,11 +467,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .chart-header h2 { margin-bottom: 0; }
   .chart-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .chart-day-count { font-size: 11px; color: var(--muted); }
-  .tz-group { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-  .tz-btn { padding: 3px 10px; background: transparent; border: none; border-right: 1px solid var(--border); color: var(--muted); font-size: 11px; cursor: pointer; transition: background 0.15s, color 0.15s; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-  .tz-btn:last-child { border-right: none; }
-  .tz-btn:hover { background: var(--raised); color: var(--text); }
-  .tz-btn.active { background: var(--selected); color: var(--text); }
   .peak-legend { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
   .peak-swatch { width: 10px; height: 10px; background: var(--red); border-radius: 2px; display: inline-block; }
 
@@ -573,6 +569,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <option value="all">All Time</option>
     </select>
   </div>
+  <span class="tz-note" title="Days and hours are UTC throughout, matching the day boundary claude.ai bills on. Ranges near midnight will not line up with your local calendar.">UTC</span>
   <div class="filter-sep"></div>
   <div class="filter-label">Sonnet&nbsp;5 rate</div>
   <button class="filter-btn" id="sonnet5-rate-btn" onclick="toggleSonnet5Rate()" aria-pressed="false"
@@ -648,12 +645,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="chart-header">
         <h2><span class="card-caret">&#9656;</span><span id="hourly-chart-title">Average Hourly Distribution</span></h2>
         <div class="chart-header-right">
-          <span class="peak-legend" title="Mon–Fri 05:00–11:00 PT — Anthropic peak-hour throttling window"><span class="peak-swatch"></span>Peak hours (PT)</span>
+          <span class="peak-legend" title="UTC 12:00–17:00 — Anthropic's peak-hour throttling window, Mon–Fri 05:00–11:00 PT"><span class="peak-swatch"></span>Peak hours (12–17 UTC)</span>
           <span class="chart-day-count" id="hourly-day-count"></span>
-          <div class="tz-group">
-            <button class="tz-btn" data-tz="local" onclick="setHourlyTZ('local')">Local</button>
-            <button class="tz-btn" data-tz="utc"   onclick="setHourlyTZ('utc')">UTC</button>
-          </div>
         </div>
       </div>
       <div class="chart-wrap"><canvas id="chart-hourly"></canvas></div>
@@ -825,46 +818,18 @@ let sessionsLimit = TABLE_STEPS[0];
 let projectLimit = TABLE_STEPS[0];
 let branchLimit = TABLE_STEPS[0];
 let dispatchesLimit = TABLE_STEPS[0];
-let hourlyTZ = 'local';  // 'local' or 'utc'
 
 // ── Peak-hour config ───────────────────────────────────────────────────────
 // Anthropic throttles Mon–Fri 05:00–11:00 PT. We approximate as fixed UTC hours
 // 12–17 (matches PDT; during PST the window shifts by 1h — accepted simplification).
 const PEAK_HOURS_UTC = new Set([12, 13, 14, 15, 16, 17]);
 
-// Local-timezone offset in hours (signed). Fractional offsets (e.g. India UTC+5:30)
-// are rounded to the nearest hour for bucket alignment.
-function localOffsetHours() {
-  return Math.round(-new Date().getTimezoneOffset() / 60);
-}
-
-// Return the UTC hour (0–23) corresponding to a displayed-hour bucket.
-function displayHourToUTC(displayHour, tzMode) {
-  if (tzMode === 'utc') return displayHour;
-  return ((displayHour - localOffsetHours()) % 24 + 24) % 24;
-}
-
-// Return the displayed-hour bucket for a UTC hour.
-function utcHourToDisplay(utcHour, tzMode) {
-  if (tzMode === 'utc') return utcHour;
-  return ((utcHour + localOffsetHours()) % 24 + 24) % 24;
-}
-
-function isPeakHour(displayHour, tzMode) {
-  return PEAK_HOURS_UTC.has(displayHourToUTC(displayHour, tzMode));
+function isPeakHour(utcHour) {
+  return PEAK_HOURS_UTC.has(utcHour);
 }
 
 function formatHourLabel(h) {
   return String(h).padStart(2, '0') + ':00';
-}
-
-function tzDisplayName(tzMode) {
-  if (tzMode === 'utc') return 'UTC';
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
-  } catch(e) {
-    return 'Local';
-  }
 }
 
 // ── Pricing (Anthropic API, June 2026) ─────────────────────────────────────
@@ -1075,16 +1040,25 @@ const RANGE_LABELS = { 'today': 'Today', 'week': 'This Week', 'month': 'This Mon
 const RANGE_TICKS  = { 'today': 1, 'week': 7, 'month': 15, 'prev-month': 15, '7d': 7, '30d': 15, '90d': 13, 'all': 12 };
 const VALID_RANGES = Object.keys(RANGE_LABELS);
 
-// Local calendar date as YYYY-MM-DD. NOT toISOString(), which formats in UTC and
-// shifts the day back in UTC+ timezones (that was the "This Month" bug, #151).
-function localISODate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+// UTC calendar date as YYYY-MM-DD. Every date and hour in this dashboard is UTC:
+// turns are bucketed by the UTC portion of their timestamp, and claude.ai bills by
+// a day boundary at or within a couple of hours of UTC, so a UTC calendar is the
+// one that reconciles. Reading a range's bounds in any other zone puts the client
+// and the stored data on different days near midnight.
+function utcISODate(d) {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+}
+
+// Wall-clock instant as 'YYYY-MM-DD HH:MM UTC', for "last fetched"-style stamps.
+function fmtUTCStamp(d) {
+  return utcISODate(d) + ' ' + String(d.getUTCHours()).padStart(2,'0')
+    + ':' + String(d.getUTCMinutes()).padStart(2,'0') + ' UTC';
 }
 
 function rangeIncludesToday(range) {
   if (range === 'all') return true;
   const { start, end } = getRangeBounds(range);
-  const today = localISODate(new Date());
+  const today = utcISODate(new Date());
   if (start && today < start) return false;
   if (end && today > end) return false;
   return true;
@@ -1093,31 +1067,31 @@ function rangeIncludesToday(range) {
 function getRangeBounds(range) {
   if (range === 'all') return { start: null, end: null };
   const today = new Date();
-  const iso = localISODate;
+  const iso = utcISODate;
   if (range === 'today') {
     const t = iso(today);
     return { start: t, end: t };
   }
   if (range === 'week') {
-    const day = today.getDay();
+    const day = today.getUTCDay();
     const diffToMon = day === 0 ? 6 : day - 1;
-    const mon = new Date(today); mon.setDate(today.getDate() - diffToMon);
-    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    const mon = new Date(today); mon.setUTCDate(today.getUTCDate() - diffToMon);
+    const sun = new Date(mon); sun.setUTCDate(mon.getUTCDate() + 6);
     return { start: iso(mon), end: iso(sun) };
   }
   if (range === 'month') {
-    const start = new Date(today.getFullYear(), today.getMonth(), 1);
-    const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
     return { start: iso(start), end: iso(end) };
   }
   if (range === 'prev-month') {
-    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const end = new Date(today.getFullYear(), today.getMonth(), 0);
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+    const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
     return { start: iso(start), end: iso(end) };
   }
   const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
   const d = new Date();
-  d.setDate(d.getDate() - days);
+  d.setUTCDate(d.getUTCDate() - days);
   return { start: iso(d), end: null };
 }
 
@@ -1152,14 +1126,6 @@ function updateSonnet5Toggle() {
   btn.textContent = std ? 'Sonnet 5: $3 / $15 (std)' : 'Sonnet 5: $2 / $10 (intro)';
   btn.classList.toggle('active', std);
   btn.setAttribute('aria-pressed', std ? 'true' : 'false');
-}
-
-function setHourlyTZ(mode) {
-  hourlyTZ = mode;
-  document.querySelectorAll('.tz-btn').forEach(btn =>
-    btn.classList.toggle('active', btn.dataset.tz === mode)
-  );
-  applyFilter();
 }
 
 // ── Model filter ───────────────────────────────────────────────────────────
@@ -1475,7 +1441,7 @@ function applyFilter() {
   const hourlySrc = (rawData.hourly_by_model || []).filter(r =>
     selectedModels.has(r.model) && (!start || r.day >= start) && (!end || r.day <= end)
   );
-  const hourlyAgg = aggregateHourly(hourlySrc, hourlyTZ);
+  const hourlyAgg = aggregateHourly(hourlySrc);
 
   // Subagent breakdown by type (filtered by range + selected models)
   const subagentTypeMap = {};
@@ -2114,7 +2080,7 @@ function renderReconciliation(start, end) {
 
   const fetched = rawData.api_spend_fetched_at;
   document.getElementById('recon-caption').textContent =
-    (fetched ? 'claude.ai data as of ' + fetched : 'claude.ai data') +
+    (fetched ? 'claude.ai data as of ' + fmtUTCStamp(new Date(fetched)) : 'claude.ai data') +
     '  ·  Local day-buckets are UTC; claude.ai buckets may differ near midnight.';
 
   renderReconChart(rec);
@@ -2132,7 +2098,7 @@ function renderReconBanner() {
   const fetchedRaw = rawData.api_spend_fetched_at;
   const fetched = fetchedRaw ? new Date(fetchedRaw) : null;
   const stale = !fetched || (Date.now() - fetched.getTime()) > 26 * 3600 * 1000;
-  const asOf = fetched ? fetched.toLocaleString() : 'never';
+  const asOf = fetched ? fmtUTCStamp(fetched) : 'never';
 
   let cls = '', msg = '', expand = false;
   if (status === 'auth_failed') {
@@ -2218,14 +2184,13 @@ function renderReconChart(rec) {
 
 // Bucket rows into 24 hours (display-TZ), summing turns + output, and count
 // the unique days in the input so the caller can compute per-day averages.
-function aggregateHourly(rows, tzMode) {
+function aggregateHourly(rows) {
   const byHour = {};
   for (let h = 0; h < 24; h++) byHour[h] = { turns: 0, output: 0 };
   const days = new Set();
   for (const r of rows) {
-    const displayHour = utcHourToDisplay(r.hour, tzMode);
-    byHour[displayHour].turns  += r.turns  || 0;
-    byHour[displayHour].output += r.output || 0;
+    byHour[r.hour].turns  += r.turns  || 0;
+    byHour[r.hour].output += r.output || 0;
     if (r.day) days.add(r.day);
   }
   const dayCount = days.size;
@@ -2236,7 +2201,7 @@ function aggregateHourly(rows, tzMode) {
       avgTurns:   dayCount ? byHour[h].turns  / dayCount : 0,
       avgOutput:  dayCount ? byHour[h].output / dayCount : 0,
       totalTurns: byHour[h].turns,
-      peak:       isPeakHour(h, tzMode),
+      peak:       isPeakHour(h),
     });
   }
   return { hours, dayCount };
@@ -2245,8 +2210,8 @@ function aggregateHourly(rows, tzMode) {
 function renderHourlyChart(agg) {
   const dayCountEl = document.getElementById('hourly-day-count');
   dayCountEl.textContent = agg.dayCount
-    ? agg.dayCount + ' day' + (agg.dayCount === 1 ? '' : 's') + ' averaged · ' + tzDisplayName(hourlyTZ)
-    : 'No data · ' + tzDisplayName(hourlyTZ);
+    ? agg.dayCount + ' day' + (agg.dayCount === 1 ? '' : 's') + ' averaged · UTC'
+    : 'No data · UTC';
 
   const ctx = document.getElementById('chart-hourly').getContext('2d');
   if (charts.hourly) charts.hourly.destroy();
@@ -2304,7 +2269,7 @@ function renderHourlyChart(agg) {
               if (!items.length) return '';
               const idx = items[0].dataIndex;
               const h = agg.hours[idx];
-              const base = formatHourLabel(h.hour) + ' ' + tzDisplayName(hourlyTZ);
+              const base = formatHourLabel(h.hour) + ' UTC';
               return h.peak ? base + ' · Peak — Anthropic US hours' : base;
             },
             label: (item) => {
@@ -2830,8 +2795,7 @@ function csvField(val) {
 
 function csvTimestamp() {
   const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')
-    + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+  return utcISODate(d) + '_' + String(d.getUTCHours()).padStart(2,'0') + String(d.getUTCMinutes()).padStart(2,'0');
 }
 
 function downloadCSV(reportType, header, rows) {
@@ -2936,10 +2900,6 @@ async function loadData() {
       selectedRange = readURLRange();
       const rangeSel = document.getElementById('range-select');
       if (rangeSel) rangeSel.value = selectedRange;
-      // Mark default TZ button active
-      document.querySelectorAll('.tz-btn').forEach(btn =>
-        btn.classList.toggle('active', btn.dataset.tz === hourlyTZ)
-      );
       // Build model filter (reads URL for model selection too)
       buildFilterUI(d.all_models);
       updateSonnet5Toggle();

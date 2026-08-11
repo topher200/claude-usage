@@ -12,7 +12,7 @@ import os
 import sys
 import sqlite3
 from pathlib import Path
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta, timezone
 
 from scanner import VERSION
 
@@ -86,6 +86,16 @@ def fmt(n):
 def fmt_cost(c):
     return f"${c:.4f}"
 
+def utc_today():
+    """Today's date in UTC.
+
+    Turns are bucketed by the UTC portion of their timestamp, so a date to match
+    them against has to come from the same calendar. A local date west of UTC
+    selects a day the stored timestamps have not reached yet; east of UTC it
+    selects one they have already left.
+    """
+    return datetime.now(timezone.utc).date()
+
 def hr(char="-", width=60):
     print(char * width)
 
@@ -115,7 +125,7 @@ def cmd_scan(projects_dir=None, verbose=True):
 
 def cmd_today():
     conn = require_db()
-    today = date.today().isoformat()
+    today = utc_today().isoformat()
 
     rows = conn.execute("""
         SELECT
@@ -149,7 +159,7 @@ def cmd_today():
 
     print()
     hr()
-    print(f"  Today's Usage  ({today})")
+    print(f"  Today's Usage  ({today} UTC)")
     hr()
 
     if not rows:
@@ -185,7 +195,7 @@ def cmd_today():
 def cmd_week():
     conn = require_db()
 
-    today_d = date.today()
+    today_d = utc_today()
     start_d = today_d - timedelta(days=6)
     start = start_d.isoformat()
     end = today_d.isoformat()
@@ -228,7 +238,7 @@ def cmd_week():
 
     print()
     hr()
-    print(f"  Weekly Usage  ({start} to {end})")
+    print(f"  Weekly Usage  ({start} to {end} UTC)")
     hr()
 
     if not by_model:

@@ -175,12 +175,14 @@ def refresh_spend(db_path=None, start=None, end=None, group_by="model_tier"):
     network_error.
     """
     import scanner
-    from datetime import date, datetime
+    from datetime import datetime, timezone
 
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     start = start or today.replace(day=1).isoformat()
     end = end or today.isoformat()
-    attempt_at = datetime.now().isoformat(timespec="seconds")
+    # "...Z", matching the transcript timestamps already stored in `turns`, so a
+    # string MAX() over the column orders correctly and JS parses it as UTC.
+    attempt_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if not has_credentials():
         return {"status": "no_credentials", "attempt_at": attempt_at,

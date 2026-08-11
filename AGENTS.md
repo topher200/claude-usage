@@ -61,7 +61,7 @@ A conditional unique index on `turns.message_id` (where non-empty) lets `INSERT 
 
 ### Non-obvious invariants
 
-These three things will bite you if you don't know them:
+These four things will bite you if you don't know them:
 
 1. **Streaming dedupe by `message.id`.** Claude Code writes multiple JSONL records per API response — only the *last* one for a given `message.id` has the final usage tallies. `parse_jsonl_file` keeps the last record per `message_id` in a dict; earlier records are discarded. Don't sum across records of the same `message_id`.
 
@@ -69,13 +69,15 @@ These three things will bite you if you don't know them:
 
 3. **Session primary model priority is opus > sonnet > haiku** (`_model_priority` in [scanner.py](scanner.py)). This prevents a subagent's haiku turn from overwriting the session's opus model when an existing session is updated. Per-turn model is always honored in the `turns` table; only the session-level summary uses the priority.
 
+4. **Every date and hour in this project is UTC.** Turns are bucketed with `substr(timestamp, 1, 10)` over the `…Z` transcript timestamp, so the day is a UTC day; the hourly chart's `hour` is a UTC hour. Anything that produces a date to compare against that data must come from the same calendar — `cli.utc_today()` on the Python side, `utcISODate()` / `getUTC*` on the client. `date.today()`, `new Date().getDate()`, and `toISOString()`-on-a-local-Date are all wrong here, and they're wrong *silently*: the mismatch only shows for the part of each day when the local and UTC calendars disagree, which is never in CI (it runs UTC). [tests/test_timezone.py](tests/test_timezone.py) forces UTC-12 and UTC+14 to make it observable. The dashboard labels this convention next to the range selector, because a UTC day boundary visibly disagrees with the viewer's clock — usage after 20:00 US-Eastern lands on tomorrow's bar, which is correct, not a bug.
+
 ### claude.ai reconciliation (authoritative spend)
 
 The scanner's cost is an *estimate* from local transcripts (this machine's `~/.claude/projects/` plus any `CLAUDE_USAGE_EXTRA_DIRS`). The claude.ai usage API is the *ground truth* Anthropic actually bills, org-wide across every machine. `spend_api.fetch_spend()` hits `…/organizations/{org}/usage/spend` (`group_by=model_tier|product_surface`, `granularity=daily` — hourly is rejected, daily is the finest bucket) and `cli.py fetch-spend` upserts it into the `api_spend` table (`scanner.store_api_spend`). The dashboard's **Reconciliation** panel then splits `api_cost − local_cost` per tier into a **coverage** gap (tokens billed but absent locally, valued at our prices) and a **pricing** gap (identical tokens, price mismatch). A near-zero pricing gap validates the `PRICING` dicts; a large coverage gap means usage the local scan can't see.
 
 - **Credentials never touch the repo.** They resolve from `CLAUDE_AI_ORG_ID` + `CLAUDE_AI_COOKIE` env vars, else `~/.claude/claude-usage/credentials.json` (`{"org_id", "cookie"}`). The durable `sessionKey` cookie alone authenticates (the Cloudflare cookies aren't required); it expires eventually. `spend_api.refresh_spend()` centralizes fetch+store and records the outcome (ok / auth_failed / rate_limited / network_error) in `schema_meta` so the dashboard can flag an expired key vs a transient failure vs merely stale data.
 - **Refreshing a key:** `cli.py set-session-key` (paste a raw key or a whole "copy as cURL" blob — `spend_api.parse_credentials_input` extracts key + org), or the Reconciliation panel's in-page field (`POST /api/set-session-key`). Both validate with an immediate fetch.
-- **The API buckets days by Anthropic's own timezone** (not UTC), so per-day API-vs-local can disagree by a day near midnight; totals over a range are unaffected.
+- **The API's day boundary is at or slightly east of UTC.** Fitting local per-day cost against `api_spend` under the constraint that local cost can never exceed billed cost (local transcripts are a subset of what's billed) leaves UTC…UTC+2 as the only feasible range, and rules out US zones outright. UTC is inside that range and is what the local side already buckets on, so per-day comparisons line up; a residual disagreement of a couple of hours' worth of usage near midnight is expected, and totals over a range are unaffected.
 - Refresh cadence is periodic, not real-time: a long-lived dashboard auto-fetches about daily (`SPEND_FETCH_INTERVAL`, sleep-first so tests driving `cmd_dashboard` never hit the network), and `fetch-spend` runs on demand. The ground truth only moves as fast as you re-fetch it.
 
 ### Cost calculation
