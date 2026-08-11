@@ -467,8 +467,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .chart-header h2 { margin-bottom: 0; }
   .chart-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .chart-day-count { font-size: 11px; color: var(--muted); }
-  .peak-legend { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
-  .peak-swatch { width: 10px; height: 10px; background: var(--red); border-radius: 2px; display: inline-block; }
 
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; padding: 8px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -645,7 +643,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="chart-header">
         <h2><span class="card-caret">&#9656;</span><span id="hourly-chart-title">Average Hourly Distribution</span></h2>
         <div class="chart-header-right">
-          <span class="peak-legend" title="08:00–14:00 ET — Anthropic's peak-hour throttling window (Mon–Fri 05:00–11:00 PT). Fixed year-round: Eastern and Pacific shift together."><span class="peak-swatch"></span>Peak hours (08–14 ET)</span>
           <span class="chart-day-count" id="hourly-day-count"></span>
         </div>
       </div>
@@ -827,13 +824,6 @@ let dispatchesLimit = TABLE_STEPS[0];
 // buckets and every date range stay UTC; only the hour axis is Eastern.
 const HOUR_TZ = 'America/New_York';
 const HOUR_TZ_LABEL = 'ET';
-
-// Anthropic throttles Mon–Fri 05:00–11:00 PT, i.e. 08:00–14:00 ET.
-const PEAK_HOURS_ET = new Set([8, 9, 10, 11, 12, 13]);
-
-function isPeakHour(displayHour) {
-  return PEAK_HOURS_ET.has(displayHour);
-}
 
 const _hourTZFormat = new Intl.DateTimeFormat('en-CA', {
   timeZone: HOUR_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -2233,7 +2223,6 @@ function aggregateHourly(rows) {
       avgTurns:   dayCount ? byHour[h].turns  / dayCount : 0,
       avgOutput:  dayCount ? byHour[h].output / dayCount : 0,
       totalTurns: byHour[h].turns,
-      peak:       isPeakHour(h),
     });
   }
   return { hours, dayCount };
@@ -2251,8 +2240,6 @@ function renderHourlyChart(agg) {
   const labels = agg.hours.map(h => formatHourLabel(h.hour));
   const turns  = agg.hours.map(h => h.avgTurns);
   const output = agg.hours.map(h => h.avgOutput);
-  const barColors      = agg.hours.map(h => h.peak ? 'rgba(199,78,57,0.9)' : TOKEN_COLORS.input);
-  const barHoverColors = agg.hours.map(h => h.peak ? 'rgba(199,78,57,1)'   : TOKEN_HOVER.input);
 
   charts.hourly = new Chart(ctx, {
     data: {
@@ -2263,8 +2250,8 @@ function renderHourlyChart(agg) {
           label: 'Avg turns / hour',
           hidden: hiddenSeries.hourly.has('Avg turns / hour'),
           data: turns,
-          backgroundColor: barColors,
-          hoverBackgroundColor: barHoverColors,
+          backgroundColor: TOKEN_COLORS.input,
+          hoverBackgroundColor: TOKEN_HOVER.input,
           pointStyle: 'rect',
           yAxisID: 'y',
           order: 2,
@@ -2301,8 +2288,7 @@ function renderHourlyChart(agg) {
               if (!items.length) return '';
               const idx = items[0].dataIndex;
               const h = agg.hours[idx];
-              const base = formatHourLabel(h.hour) + ' ' + HOUR_TZ_LABEL;
-              return h.peak ? base + ' · Peak — Anthropic US hours' : base;
+              return formatHourLabel(h.hour) + ' ' + HOUR_TZ_LABEL;
             },
             label: (item) => {
               if (item.dataset.label && item.dataset.label.indexOf('turns') !== -1) {

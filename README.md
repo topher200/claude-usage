@@ -143,7 +143,7 @@ Claude Code writes one JSONL file per session to `~/.claude/projects/`. Each lin
 
 All dates are **UTC** — a day runs 00:00–24:00 UTC, matching the day boundary claude.ai bills on. Ranges like "Today" and "This Month" therefore won't line up with a local calendar near midnight: west of UTC, evening usage appears on the next day's bar.
 
-The one exception is the hourly distribution chart, whose hour axis is **Eastern**. Its highlighted peak band marks Anthropic's throttling window (Mon–Fri 05:00–11:00 PT), which is a fixed 08:00–14:00 ET year-round but drifts by an hour in UTC when daylight saving changes.
+The one exception is the hourly distribution chart, whose hour axis is **Eastern** — it answers when during the day you work, which is a question about a real timezone rather than a billing boundary.
 
 ---
 

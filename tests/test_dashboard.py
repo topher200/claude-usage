@@ -427,12 +427,6 @@ class TestHTMLTemplate(unittest.TestCase):
         other date and hour in the dashboard (see tests/test_timezone.py)."""
         self.assertIn('id="chart-hourly"', HTML_TEMPLATE)
 
-    def test_hourly_peak_hour_constants(self):
-        """Peak-hour set covers ET 08–13 (Mon–Fri 05:00–11:00 PT). See
-        tests/test_timezone.py for the tie back to the Pacific definition."""
-        self.assertIn('PEAK_HOURS_ET', HTML_TEMPLATE)
-        self.assertIn('[8, 9, 10, 11, 12, 13]', HTML_TEMPLATE)
-
     def test_today_range_option_present(self):
         """The 'Today' range is wired into RANGE_LABELS, RANGE_TICKS,
         getRangeBounds, and the filter-bar range dropdown."""

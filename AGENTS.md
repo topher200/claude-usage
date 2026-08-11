@@ -71,7 +71,7 @@ These four things will bite you if you don't know them:
 
 4. **Every date in this project is UTC, and so is every hour except the hourly chart's axis.** Turns are bucketed with `substr(timestamp, 1, 10)` over the `…Z` transcript timestamp, so the day is a UTC day, and the `hour` column the scanner emits is a UTC hour. Anything that produces a date to compare against that data must come from the same calendar — `cli.utc_today()` on the Python side, `utcISODate()` / `getUTC*` on the client. `date.today()`, `new Date().getDate()`, and `toISOString()`-on-a-local-Date are all wrong here, and they're wrong *silently*: the mismatch only shows for the part of each day when the local and UTC calendars disagree, which is never in CI (it runs UTC). [tests/test_timezone.py](tests/test_timezone.py) forces UTC-12 and UTC+14 to make it observable. The dashboard labels this convention next to the range selector, because a UTC day boundary visibly disagrees with the viewer's clock — usage after 20:00 US-Eastern lands on tomorrow's bar, which is correct, not a bug.
 
-   The **hourly distribution chart's hour axis is Eastern** (`HOUR_TZ` in [dashboard.py](dashboard.py)), the single exception, and it is deliberate: the peak band marks Anthropic's throttling window, defined as Mon–Fri 05:00–11:00 PT. Pacific and Eastern shift together, so that window is a fixed 08:00–14:00 ET year-round, where in UTC it moves between 12–17 and 13–18 with daylight saving — the old hardcoded `PEAK_HOURS_UTC = [12..17]` was therefore wrong for about five months a year. `displayHourFor()` resolves each (UTC day, UTC hour) pair through `Intl.DateTimeFormat` rather than applying a fixed offset, so DST transition days are handled too. The zone is fixed rather than the viewer's local zone, so the chart reads the same everywhere. Note what does *not* change: the range filter still selects UTC days, and `aggregateHourly`'s day count is still the count of UTC days the range selected — the hour buckets redistribute the same turns, so dividing by the number of days selected is what makes an average-day figure. Don't "fix" that to count Eastern days; for a single-day range it would span two Eastern days and halve every average.
+   The **hourly distribution chart's hour axis is Eastern** (`HOUR_TZ` in [dashboard.py](dashboard.py)), the single exception. An hour-of-day chart answers "when in my day do I work", which is a question about a real timezone, and `displayHourFor()` resolves each (UTC day, UTC hour) pair through `Intl.DateTimeFormat` so daylight saving and its transition days are handled rather than approximated with a fixed offset. The zone is hardcoded rather than read from the viewer, so the chart reads the same everywhere. Note what does *not* change: the range filter still selects UTC days, and `aggregateHourly`'s day count is still the count of UTC days the range selected — the hour buckets redistribute the same turns, so dividing by the number of days selected is what makes an average-day figure. Don't "fix" that to count Eastern days; for a single-day range it would span two Eastern days and halve every average.
 
 ### claude.ai reconciliation (authoritative spend)
 
@@ -113,6 +113,26 @@ After completing a new feature or any other changes, restart the systemd version
 - `tests/test_scanner.py` and `tests/test_dashboard.py` use `tempfile.NamedTemporaryFile` for an isolated DB; never touch the user's real `~/.claude/usage.db`.
 - The `/api/rescan` test patches `dashboard.DB_PATH` and `scanner.DEFAULT_PROJECTS_DIRS` — keep that contract intact (see commit 8ae2664).
 - On Windows, `~/.claude/` may not exist on a fresh checkout. `get_db` creates the parent dir (`mkdir(parents=True, exist_ok=True)`) — don't remove that or `sqlite3.connect` will fail in CI / fresh installs (commit b5d1e15).
+
+## Pulling in upstream changes
+
+This repo is a fork. `origin` is `topher200/claude-usage`, `upstream` is `phuryn/claude-usage`. The fork diverged at upstream's `v1.5.4` and carries features upstream doesn't have (claude.ai spend reconciliation, monthly limit projection, `CLAUDE_USAGE_EXTRA_DIRS`, the UTC day convention). It stays a fork; upstream changes come in by **merge**, and only the non-obvious parts are written down here.
+
+**Merge, never rebase.** `main` is published and carries PR merge commits. Rebasing our commits onto upstream would rewrite that history and require a force-push. `git merge --no-ff upstream/main`.
+
+**Expect a version-heading collision, and resolve it upward.** Both projects write `## vX.Y.Z — TBD` while accumulating, so the same version number routinely names two different codebases. Upstream may have already *tagged* that version. Renumber our section — usually a minor bump, since what we accumulate is feature-bearing — and bump `scanner.VERSION` plus `vscode-extension/package.json` with it (`tests/test_version.py` enforces the trio).
+
+**Fetching upstream imports upstream's tags into this clone.** A `v1.5.5` tag can appear locally that points at upstream's release, not ours, while `origin` has no tags at all. Don't read `git tag` as a statement about this fork; use `git ls-remote --tags origin`.
+
+**Check whether upstream's fix is a fix *for us*.** Conventions diverge, so an upstream change can be actively wrong here. Upstream's #151 moved date-range bounds onto the *local* calendar; this fork buckets on UTC, so merging it re-broke what it fixed upstream and had to be inverted. Read the diff against our invariants, not just for conflicts.
+
+**Cost-touching merges need the 1h cache split threaded through.** `calcCost` / `calc_cost` take a sixth argument upstream doesn't have. An upstream caller that passes five will silently bill 1h cache writes at the 5m rate — it won't error. Grep new `calcCost(` call sites after any merge.
+
+**Actions don't run on this fork.** Workflow files are present and marked active, and `actions/permissions` reports `enabled: true`, but nothing has ever executed (GitHub gates Actions on forks until enabled in the Actions tab). So pushing a new `## vX.Y.Z` heading to `main` does *not* tag or publish a release the way it would upstream, and CI does not check pushes here — run `python -m unittest discover -s tests` locally. Verify with `gh api 'repos/topher200/claude-usage/actions/runs?per_page=1' --jq '.total_count'` before assuming either way.
+
+**There's no JS engine on this machine** (volta has no default node), so the dashboard's embedded JS can't be syntax-checked or executed after a merge. Verify date/time logic by transliterating it to Python and testing the boundaries, assert structure against `HTML_TEMPLATE` in tests, then load the page and look at it.
+
+**Restart the systemd unit after merging** so the long-running dashboard picks up the merged code: `systemctl --user restart claude-usage.service`.
 
 ## Respecting contributors
 

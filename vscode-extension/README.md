@@ -14,7 +14,7 @@ Works on **API, Pro, and Max plans**. Captures usage from the Claude Code CLI, t
 
 ## What it shows
 
-- **Daily token usage** and **average hourly distribution** charts (with peak-hour shading)
+- **Daily token usage** and **average hourly distribution** charts
 - **Cost by model, project, and project + branch** tables, plus **Recent Sessions** — sortable, paged, and CSV-exportable
 - **Subagent attribution** — a Subagent Tokens by Type chart and a Top Subagent Dispatches table that break dispatched Task/Agent usage out from your main sessions
 - **Model multi-select** and a **date-range** dropdown to scope everything at once

@@ -177,10 +177,6 @@ class TestHourlyChartHours(unittest.TestCase):
         self.assertIn("formatHourLabel(h.hour) + ' ' + HOUR_TZ_LABEL", HTML_TEMPLATE)
         self.assertIn("'Hour of day (' + HOUR_TZ_LABEL + ')'", HTML_TEMPLATE)
 
-    def test_peak_hours_keyed_off_the_display_hour(self):
-        self.assertIn("function isPeakHour(displayHour)", HTML_TEMPLATE)
-        self.assertIn("return PEAK_HOURS_ET.has(displayHour);", HTML_TEMPLATE)
-
     def test_hour_bucketing_does_not_leak_into_the_range_filter(self):
         """Only the hour axis is Eastern. getRangeBounds stays on UTC."""
         start = HTML_TEMPLATE.index("function getRangeBounds(range)")
@@ -189,48 +185,16 @@ class TestHourlyChartHours(unittest.TestCase):
         self.assertNotIn("HOUR_TZ", body)
         self.assertNotIn("America/New_York", body)
 
-
-class TestPeakWindowMatchesPacificDefinition(unittest.TestCase):
-    """`PEAK_HOURS_ET` is a derived value: Anthropic defines the throttling window
-    as Mon-Fri 05:00-11:00 Pacific. These assert the constant still equals that
-    window converted to Eastern, in both daylight-saving regimes, rather than
-    restating the numbers — and that the same window in UTC is not constant, which
-    is the reason the hour axis is not UTC."""
-
-    PACIFIC_START, PACIFIC_END = 5, 11  # 05:00 through 10:59 PT
-
-    def setUp(self):
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:  # pragma: no cover - Python < 3.9
-            self.skipTest("zoneinfo requires Python 3.9+")
-        try:
-            self.et = ZoneInfo("America/New_York")
-            self.pt = ZoneInfo("America/Los_Angeles")
-        except Exception:  # pragma: no cover - system without a tz database
-            self.skipTest("system tz database unavailable")
-
-    def _pacific_window_in(self, zone, day):
-        return {
-            datetime.fromisoformat(f"{day}T{h:02d}:00:00")
-            .replace(tzinfo=self.pt).astimezone(zone).hour
-            for h in range(self.PACIFIC_START, self.PACIFIC_END)
-        }
-
-    def _declared_peak_hours(self):
-        marker = "const PEAK_HOURS_ET = new Set(["
-        start = HTML_TEMPLATE.index(marker) + len(marker)
-        return {int(x) for x in HTML_TEMPLATE[start:HTML_TEMPLATE.index("]", start)].split(",")}
-
-    def test_declared_hours_match_the_pacific_window_year_round(self):
-        declared = self._declared_peak_hours()
-        for day in ("2026-01-15", "2026-04-15", "2026-07-15", "2026-11-15"):
-            with self.subTest(day=day):
-                self.assertEqual(declared, self._pacific_window_in(self.et, day))
-
-    def test_the_same_window_is_not_constant_in_utc(self):
-        self.assertNotEqual(self._pacific_window_in(timezone.utc, "2026-01-15"),
-                            self._pacific_window_in(timezone.utc, "2026-07-15"))
+    def test_no_peak_hour_shading(self):
+        """The chart carried a red band marking Anthropic's peak-hour limit
+        reduction on Claude Code (Mon-Fri 05:00-11:00 PT). Anthropic removed
+        that limit reduction for Pro and Max on 2026-05-06, so the band marks
+        nothing. Re-adding it needs a current source for the window, not the
+        old constant."""
+        for token in ("PEAK_HOURS", "isPeakHour", "peak-legend", "peak-swatch",
+                      "Peak hours", "Peak — Anthropic"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, HTML_TEMPLATE)
 
 
 if __name__ == "__main__":
